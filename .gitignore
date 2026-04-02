@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# Copilot and local repo ignore config
+.github/copilot-instructions.md
+.gitignore
+
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
