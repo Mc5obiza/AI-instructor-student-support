@@ -1,0 +1,79 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python extension artifacts
+*.so
+*.pyd
+*.dll
+
+# Virtual environments and local env managers
+.venv/
+venv/
+env/
+ENV/
+.conda/
+conda-meta/
+.python-version
+
+# Build and packaging
+build/
+dist/
+site/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Test and quality caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit.xml
+
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# IDE and editor
+.vscode/
+.idea/
+*.code-workspace
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs and temp
+*.log
+logs/
+tmp/
+temp/
+.cache/
+
+# Local data artifacts
+data/raw/
+data/processed/
+
+# Generated RAG/vector artifacts
+backend/vectordb/chroma_db/
+backend/rag/course_parts.json
+backend/rag/sql_combined.txt
+
+# Local databases
+*.sqlite
+*.sqlite3
