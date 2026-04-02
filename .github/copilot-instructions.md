@@ -1,52 +1,157 @@
-<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
-- [x] Verify that the copilot-instructions.md file in the .github directory is created. (Initialized checklist file.)
+# Copilot Instructions
 
-- [x] Clarify Project Requirements (User requested FastAPI backend, Streamlit frontend, data/model dirs.)
-	<!-- Ask for project type, language, and frameworks if not specified. Skip if already provided. -->
+## Project Overview
+This project is an AI-powered learning assistant built with a Retrieval-Augmented Generation (RAG) architecture.
 
-- [x] Scaffold the Project (Created FastAPI/Streamlit scaffold with required folders.)
-	<!--
-	Ensure that the previous step has been marked as completed.
-	Call project setup tool with projectType parameter.
-	Run scaffolding command to create project files and folders.
-	Use '.' as the working directory.
-	If no appropriate projectType is available, search documentation using available tools.
-	Otherwise, create the project structure manually using available file creation tools.
-	-->
+The system allows students to ask questions about course material (PDFs and Jupyter notebooks).  
+The system retrieves relevant document chunks and uses a local LLM to generate answers.
 
-- [x] Customize the Project (Stubbed RAG processors, retriever, generator, analytics, and UI.)
-	<!--
-	Verify that all previous steps have been completed successfully and you have marked the step as completed.
-	Develop a plan to modify codebase according to user requirements.
-	Apply modifications using appropriate tools and user-provided references.
-	Skip this step for "Hello World" projects.
-	-->
+Core pipeline:
 
-- [x] Install Required Extensions (No extensions requested.)
-	<!-- ONLY install extensions provided mentioned in the get_project_setup_info. Skip this step otherwise and mark as completed. -->
+User Question
+→ Embedding search
+→ Vector retrieval
+→ Reranking
+→ Context compression
+→ LLM answer generation
 
-- [x] Compile the Project (Skipped: no build/compile step yet.)
-	<!--
-	Verify that all previous steps have been completed.
-	Install any missing dependencies.
-	Run diagnostics and resolve any issues.
-	Check for markdown files in project folder for relevant instructions on how to do this.
-	-->
+Models used:
 
-- [x] Create and Run Task (Not needed for this scaffold.)
-	<!--
-	Verify that all previous steps have been completed.
-	Check https://code.visualstudio.com/docs/debugtest/tasks to determine if the project needs a task. If so, use the create_and_run_task to create and launch a task based on package.json, README.md, and project structure.
-	Skip this step otherwise.
-	 -->
+- LLM: llama3.1 (Ollama)
+- Embeddings: nomic-embed-text (Ollama)
+- Reranker: bge-reranker-base
+- Vector database: FAISS
 
-- [x] Launch the Project (User will run FastAPI/Streamlit manually.)
-	<!--
-	Verify that all previous steps have been completed.
-	Prompt user for debug mode, launch only if confirmed.
-	 -->
+All models run locally.
 
-- [x] Ensure Documentation is Complete (README added; removed instructional comments.)
-- Work through each checklist item systematically.
-- Keep communication concise and focused.
-- Follow development best practices.
+---
+
+## Project Architecture
+
+Repository structure:
+
+backend/
+rag/
+pdf_processor.py
+notebook_processor.py
+retriever.py
+reranker.py
+compressor.py
+generator.py
+
+scripts/
+ingest_data.py
+
+data/
+raw/
+processed/
+
+models/
+
+frontend/
+
+Guidelines:
+
+- RAG logic lives inside `backend/rag`
+- Scripts are used only for ingestion or setup
+- Retrieval pipeline should be modular
+
+---
+
+## RAG Pipeline Rules
+
+Always follow this pipeline design:
+
+1. Query embedding
+2. Vector search (ChromaDB)
+3. Retrieve top K chunks
+4. Rerank chunks
+5. Compress context
+6. Send context to LLM
+
+Important rules:
+
+- Retrieval must work without the LLM
+- The LLM should only perform reasoning or answer generation
+- Avoid using the LLM for search decisions
+
+---
+
+## Document Processing
+
+Documents come from:
+
+- PDFs
+- Jupyter notebooks
+
+Processing steps:
+
+1. Extract text
+2. Split into chunks
+3. Store metadata
+
+Metadata must include:
+
+- course
+- section
+- source file
+- chunk id
+
+This allows source attribution.
+
+---
+
+## Code Design Principles
+
+Follow these rules when generating code:
+
+- modular architecture
+- small focused functions
+- clear separation of responsibilities
+- avoid monolithic scripts
+
+Example modules:
+
+retriever.py → retrieval logic  
+reranker.py → reranking logic  
+compressor.py → context compression  
+generator.py → LLM interaction
+
+---
+
+## Performance Guidelines
+
+Prioritize efficiency:
+
+- Avoid unnecessary LLM calls
+- Prefer embeddings for retrieval
+- Rerank only top 20 results
+- Send maximum 5 chunks to the LLM
+
+Target pipeline:
+
+query
+→ embedding search (20 chunks)
+→ rerank (top 5)
+→ compress context
+→ LLM answer
+
+---
+
+## Coding Style
+
+Language: Python
+
+Follow these rules:
+
+- type hints for functions
+- clear docstrings
+- meaningful variable names
+- avoid deeply nested logic
+- separate data logic from model logic
+
+Example:
+
+```python
+def retrieve_chunks(query: str, k: int = 20) -> list[Chunk]:
+    """Retrieve candidate chunks from the vector store."""
