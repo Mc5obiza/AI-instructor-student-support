@@ -10,12 +10,15 @@ from langgraph.graph import END, START, StateGraph
 from sentence_transformers import CrossEncoder
 
 try:
-	from backend.rag.code_reviewer import run_code_reviewer_tool_from_query
+	from backend.rag.code_reviewer import (
+		get_code_reviewer_router_context,
+		run_code_reviewer_tool_from_query,
+	)
 	from backend.rag.memory import prepare_memory_summary, save_memory_turn
 	from backend.rag.rag_agent import build_generation_chain, get_collections, guard_question
 	from backend.rag.retriever import build_retrieval_tool, run_retrieval_tool_node
 except ImportError:
-	from rag.code_reviewer import run_code_reviewer_tool_from_query
+	from rag.code_reviewer import get_code_reviewer_router_context, run_code_reviewer_tool_from_query
 	from rag.memory import prepare_memory_summary, save_memory_turn
 	from rag.rag_agent import build_generation_chain, get_collections, guard_question
 	from rag.retriever import build_retrieval_tool, run_retrieval_tool_node
@@ -32,6 +35,8 @@ CONTEXT_TOKEN_LIMIT = 5000
 
 MEMORY_MAX_TOKEN_LIMIT = 1200
 MEMORY_SUMMARY_TOKEN_LIMIT = 180
+
+_SESSION_LAST_ROUTE: dict[str, str] = {}
 
 
 class OrchestratorState(TypedDict, total=False):
@@ -82,8 +87,49 @@ def _parse_router_response(raw_output: str) -> str:
 	return "rag"
 
 
-def choose_orchestration_route(question: str, llm_model: str = LLM_MODEL) -> str:
+def _get_previous_session_route(session_id: str) -> str:
+	"""Return previous route for this session if known."""
+	return _SESSION_LAST_ROUTE.get(session_id, "none")
+
+
+def _set_previous_session_route(session_id: str, route: str) -> None:
+	"""Persist last chosen route per session."""
+	if route in {"rag", "code_reviewer"}:
+		_SESSION_LAST_ROUTE[session_id] = route
+
+
+def _looks_like_code_followup(question: str) -> bool:
+	"""Detect follow-up prompts that refer to prior code without re-posting it."""
+	lowered = question.lower()
+	hints = [
+		"code",
+		"function",
+		"argument",
+		"parameter",
+		"type",
+		"string",
+		"int",
+		"float",
+		"bool",
+		"validate",
+		"check",
+		"change",
+		"modify",
+		"fix",
+		"how can i",
+	]
+	return any(hint in lowered for hint in hints)
+
+
+def choose_orchestration_route(
+	question: str,
+	llm_model: str = LLM_MODEL,
+	session_id: str = "default",
+) -> str:
 	"""Choose route using LLM-only decision."""
+	session_id = session_id.strip() or "default"
+	previous_route = _get_previous_session_route(session_id)
+	router_context = get_code_reviewer_router_context(session_id=session_id, llm_model=llm_model)
 
 	router_llm = ChatOllama(
 		model=llm_model,
@@ -104,9 +150,16 @@ or
 Routing rules:
 - Choose "code_reviewer" when the user asks to review, debug, fix, explain, or run code.
 - Choose "code_reviewer" when the message contains code snippets in any language (Python, C, C++, Java, JavaScript, pseudocode).
+- If previous route is "code_reviewer" and user asks a follow-up about modifying/checking/validating "the code" without restating it, keep route as "code_reviewer".
 - Choose "rag" for normal conceptual/course questions that do not need code review.
 
 Do not add extra keys or explanations.
+
+Session context:
+- session_id: {session_id}
+- previous_route: {previous_route}
+- code_reviewer_memory_summary: {router_context.get("memory_summary", "")}
+- last_reviewed_code_excerpt: {router_context.get("last_code_excerpt", "")}
 
 Question:
 {question}
@@ -114,7 +167,10 @@ Question:
 
 	try:
 		response = router_llm.invoke(router_prompt)
-		return _parse_router_response(str(response.content))
+		route = _parse_router_response(str(response.content))
+		if previous_route == "code_reviewer" and route != "code_reviewer" and _looks_like_code_followup(question):
+			return "code_reviewer"
+		return route
 	except Exception:
 		# Keep backend available even if routing model call fails.
 		return "rag"
@@ -123,8 +179,13 @@ Question:
 def orchestrator_node(state: OrchestratorState) -> OrchestratorState:
 	"""Choose which tool-node should handle the request."""
 	question = state.get("question", "")
+	session_id = state.get("session_id", "default")
 	llm_model = state.get("llm_model", LLM_MODEL)
-	route = choose_orchestration_route(question=question, llm_model=llm_model)
+	route = choose_orchestration_route(
+		question=question,
+		llm_model=llm_model,
+		session_id=session_id,
+	)
 	return {
 		"status": "ok",
 		"route": route,
@@ -139,8 +200,13 @@ def route_after_orchestrator(state: OrchestratorState) -> str:
 def code_reviewer_tool_node(state: OrchestratorState) -> OrchestratorState:
 	"""Call the code-review tool path from orchestrator."""
 	question = state.get("question", "")
+	session_id = state.get("session_id", "default")
 	llm_model = state.get("llm_model", LLM_MODEL)
-	code_result = run_code_reviewer_tool_from_query(query=question, llm_model=llm_model)
+	code_result = run_code_reviewer_tool_from_query(
+		query=question,
+		llm_model=llm_model,
+		session_id=session_id,
+	)
 
 	if code_result.get("status") != "ok":
 		message = str(code_result.get("answer", code_result.get("message", "Code review failed."))).strip()
@@ -302,6 +368,11 @@ def compile_prompt_with_orchestrator(
 			"route": final_state.get("route", "rag"),
 			"message": str(final_state.get("message", "I do not have enough information.")),
 		}
+
+	_set_previous_session_route(
+		session_id=session_id,
+		route=str(final_state.get("route", "rag")),
+	)
 
 	if final_state.get("route") == "code_reviewer":
 		return {
