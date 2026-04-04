@@ -1,247 +1,273 @@
 from __future__ import annotations
 
+import argparse
+import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from langchain_community.document_loaders import PyPDFLoader
+from chromadb import PersistentClient
+from chromadb.api.shared_system_client import SharedSystemClient
+from chromadb.utils import embedding_functions
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pypdf import PdfReader
 
+try:
+	from .notebook_processor import extract_notebook_text
+except ImportError:
+	# Allows running this file directly: `python backend/rag/pdf_processor.py`.
+	from notebook_processor import extract_notebook_text
+
+
+CHUNK_SIZE_TOKENS = 500
+CHUNK_OVERLAP_TOKENS = 100
+DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
+DEFAULT_EMBEDDING_URL = "http://localhost:11434/api/embeddings"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_RAW_DIR = PROJECT_ROOT / "data" / "raw"
+DEFAULT_RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+DEFAULT_PERSIST_DIR = PROJECT_ROOT / "backend" / "vectordb" / "chroma_db"
 
 
-def _dedupe_keep_order(items: List[Any]) -> List[Any]:
-	seen = set()
-	out: List[Any] = []
-	for item in items:
-		if item not in seen:
-			seen.add(item)
-			out.append(item)
-	return out
+def clean_course_name(file_path: Path) -> str:
+	"""Map file name to a normalized course name."""
+	name = file_path.stem.lower().strip()
+	name = re.sub(r"[_\-]+", " ", name)
+	name = re.sub(r"\s+", " ", name)
+	return name
 
 
-def _build_document_text_and_page_spans(pages: List[Dict[str, Any]]) -> Tuple[str, List[Dict[str, int]]]:
-	parts: List[str] = []
-	spans: List[Dict[str, int]] = []
-	cursor = 0
-
-	for i, page in enumerate(pages):
-		text = str(page.get("text", "")).strip()
-		if not text:
-			continue
-
-		if parts:
-			parts.append("\n\n")
-			cursor += 2
-
-		start = cursor
-		parts.append(text)
-		cursor += len(text)
-
-		page_raw = page.get("page", i + 1)
-		try:
-			page_num = int(page_raw)
-		except (TypeError, ValueError):
-			page_num = i + 1
-
-		spans.append({"start": start, "end": cursor, "page": page_num})
-
-	return "".join(parts), spans
+def extract_pdf_text(file_path: Path) -> str:
+	"""Extract text from PDF and keep pages connected for cross-page chunks."""
+	reader = PdfReader(str(file_path))
+	pages = [page.extract_text() or "" for page in reader.pages]
+	return "\n".join(pages)
 
 
-def split_numbered_sections_with_hierarchy(text: str) -> List[Dict[str, Any]]:
-	"""Split by numbered headings and preserve parent-child header context."""
-	heading_pattern = re.compile(r"(?m)^\s*(\d+(?:\.\d+)*)\.?\s+(.+?)\s*$")
-	matches = list(heading_pattern.finditer(text))
+def normalize_chunk_text(text: str) -> str:
+	"""Normalize chunk text for retrieval while preserving punctuation."""
+	normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+	normalized = re.sub(r"(?<=\w)-\s*\n\s*(?=\w)", "", normalized)
+	normalized = re.sub(r"\s*\n+\s*", " ", normalized)
+	normalized = re.sub(r"\s+", " ", normalized).strip()
+	return normalized.lower()
+
+
+def detect_sections(text: str) -> list[tuple[str, str]]:
+	"""Split by numbered headings like '1.intro' or fallback to one section."""
+	pattern = re.compile(r"^\s*(\d+\.[^\n]+)", re.MULTILINE)
+	matches = list(pattern.finditer(text))
 
 	if not matches:
-		cleaned = text.strip()
-		return (
-			[{"headers": [], "part": "Full Document", "body": cleaned, "start": 0, "end": len(cleaned)}]
-			if cleaned
-			else []
-		)
+		return [("0.general", text)]
 
-	sections: List[Dict[str, Any]] = []
-	stack: Dict[int, str] = {}
-
+	sections: list[tuple[str, str]] = []
 	for i, match in enumerate(matches):
-		number = match.group(1).strip()
-		title = match.group(2).strip()
-		level = len(number.split("."))
-		current_header = f"{number}. {title}"
-
-		for key in list(stack.keys()):
-			if key >= level:
-				del stack[key]
-		stack[level] = current_header
-
-		headers = [stack[key] for key in sorted(stack.keys())]
-		start = match.end()
+		start = match.start()
 		end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-		body = text[start:end].strip()
-
-		if not body:
-			continue
-
-		sections.append(
-			{
-				"headers": headers,
-				"part": current_header,
-				"body": body,
-				"start": start,
-				"end": end,
-			}
-		)
+		section_name = match.group(1).strip().lower()
+		section_text = text[start:end].strip()
+		sections.append((section_name, section_text))
 
 	return sections
 
 
-def merge_small_sections(
-	sections: List[Dict[str, Any]],
-	min_section_chars: int = 300,
-	max_merge_headers: int = 3,
-) -> List[Dict[str, Any]]:
-	"""Merge tiny neighbor sections to improve context quality for retrieval."""
-	if not sections:
-		return []
-
-	merged: List[Dict[str, Any]] = []
-	i = 0
-	while i < len(sections):
-		current = {
-			"headers": list(sections[i].get("headers", [])),
-			"part": sections[i].get("part", "Full Document"),
-			"body": sections[i].get("body", "").strip(),
-			"start": int(sections[i].get("start", 0)),
-			"end": int(sections[i].get("end", 0)),
-		}
-
-		while len(current["body"]) < min_section_chars and i + 1 < len(sections):
-			nxt = sections[i + 1]
-			nxt_body = str(nxt.get("body", "")).strip()
-			if nxt_body:
-				current["body"] = (current["body"] + "\n\n" + nxt_body).strip()
-
-			merged_headers = _dedupe_keep_order(current.get("headers", []) + nxt.get("headers", []))
-			current["headers"] = merged_headers[-max_merge_headers:] if merged_headers else []
-			if current["headers"]:
-				current["part"] = current["headers"][-1]
-
-			current["end"] = int(nxt.get("end", current["end"]))
-			i += 1
-
-		if current["body"]:
-			merged.append(current)
-		i += 1
-
-	return merged
-
-
-def _pages_for_span(start: int, end: int, page_spans: List[Dict[str, int]]) -> List[int]:
-	pages: List[int] = []
-	for span in page_spans:
-		overlaps = span["start"] < end and start < span["end"]
-		if overlaps:
-			pages.append(int(span["page"]))
-	return _dedupe_keep_order(pages)
-
-
-def _normalize_course_title(pdf_path: Path) -> str:
-	return pdf_path.stem.replace("_", " ").replace("-", " ").strip()
-
-
-def _to_source_string(path: Path) -> str:
-	try:
-		return str(path.resolve().relative_to(PROJECT_ROOT))
-	except ValueError:
-		return str(path.resolve())
-
-
-def chunk_raw_pdfs(
-	raw_dir: Optional[str | Path] = None,
-	chunk_size: int = 1000,
-	chunk_overlap: int = 150,
-	min_section_chars: int = 300,
-	max_header_depth_in_metadata: int = 3,
-) -> List[Dict[str, Any]]:
-	"""Chunk raw PDFs into metadata-rich fragments for vector indexing."""
-	raw_path = Path(raw_dir) if raw_dir is not None else DEFAULT_RAW_DIR
-	raw_path = raw_path.resolve()
-	pdf_files = sorted(raw_path.glob("*.pdf"))
-
-	splitter = RecursiveCharacterTextSplitter(
-		chunk_size=chunk_size,
-		chunk_overlap=chunk_overlap,
+def build_chunker(
+	chunk_size_tokens: int = CHUNK_SIZE_TOKENS,
+	chunk_overlap_tokens: int = CHUNK_OVERLAP_TOKENS,
+) -> RecursiveCharacterTextSplitter:
+	"""Build LangChain recursive chunker with token-like word length function."""
+	return RecursiveCharacterTextSplitter(
+		chunk_size=chunk_size_tokens,
+		chunk_overlap=chunk_overlap_tokens,
+		length_function=lambda txt: len(txt.split()),
 		separators=["\n\n", "\n", ". ", " ", ""],
 	)
 
-	chunks: List[Dict[str, Any]] = []
 
-	for pdf_path in pdf_files:
-		course_title = _normalize_course_title(pdf_path)
-		docs = PyPDFLoader(str(pdf_path)).load()
+def build_documents(raw_data_dir: Path) -> tuple[list[Document], list[Document], list[Document]]:
+	"""Create documents for course, part, and chunk collections."""
+	chunker = build_chunker()
 
-		page_rows: List[Dict[str, Any]] = []
-		for idx, doc in enumerate(docs, start=1):
-			page_text = str(doc.page_content or "").strip()
-			if not page_text:
-				continue
+	course_docs: list[Document] = []
+	part_docs: list[Document] = []
+	chunk_docs: list[Document] = []
 
-			raw_page = (doc.metadata or {}).get("page", idx - 1)
-			try:
-				page_num = int(raw_page) + 1
-			except (TypeError, ValueError):
-				page_num = idx
+	seen_courses: set[str] = set()
+	seen_parts: set[tuple[str, str]] = set()
 
-			page_rows.append({"page": page_num, "text": page_text})
-
-		if not page_rows:
+	for file_path in raw_data_dir.rglob("*"):
+		if not file_path.is_file() or file_path.suffix.lower() not in {".pdf", ".ipynb"}:
 			continue
 
-		full_text, page_spans = _build_document_text_and_page_spans(page_rows)
-		raw_sections = split_numbered_sections_with_hierarchy(full_text)
-		sections = merge_small_sections(raw_sections, min_section_chars=min_section_chars)
+		course = clean_course_name(file_path)
+		if course not in seen_courses:
+			seen_courses.add(course)
+			course_docs.append(Document(page_content=course, metadata={"course": course}))
 
-		for section_idx, section in enumerate(sections, start=1):
-			body = str(section.get("body", "")).strip()
-			if not body:
-				continue
+		full_text = extract_pdf_text(file_path) if file_path.suffix.lower() == ".pdf" else extract_notebook_text(file_path)
+		for section, section_text in detect_sections(full_text):
+			part_key = (course, section)
+			if part_key not in seen_parts:
+				seen_parts.add(part_key)
+				part_docs.append(Document(page_content=section, metadata={"course": course, "section": section}))
 
-			headers = section.get("headers", [])
-			headers = headers[-max_header_depth_in_metadata:] if headers else []
-			header_path = " > ".join(headers) if headers else ""
-			part = headers[-1] if headers else str(section.get("part", "Full Document"))
+			for idx, chunk_text in enumerate(chunker.split_text(section_text)):
+				normalized_chunk = normalize_chunk_text(chunk_text)
+				if not normalized_chunk:
+					continue
 
-			section_start = int(section.get("start", 0))
-			section_end = int(section.get("end", section_start + len(body)))
-			pages = _pages_for_span(section_start, section_end, page_spans)
-			page_start = pages[0] if pages else None
-			page_end = pages[-1] if pages else None
-
-			context_prefix = header_path if header_path else part
-			text_for_chunking = f"{context_prefix}\n{body}".strip()
-			sub_chunks = splitter.split_text(text_for_chunking) or [text_for_chunking]
-
-			for chunk_idx, sub_text in enumerate(sub_chunks, start=1):
-				chunk_id = f"{course_title}::s{section_idx}::c{chunk_idx}"
-				chunks.append(
-					{
-						"id": chunk_id,
-						"text": sub_text,
-						"metadata": {
-							"course": course_title,
-							"part": part,
-							"header_path": header_path,
-							"source": _to_source_string(pdf_path),
-							"page_start": page_start,
-							"page_end": page_end,
-							"section_index": section_idx,
-							"chunk_index": chunk_idx,
+				chunk_docs.append(
+					Document(
+						page_content=normalized_chunk,
+						metadata={
+							"course": course,
+							"section": section,
+							"source_file": file_path.name,
+							"chunk_id": f"chunk::{course}::{section}::{idx}",
 						},
-					}
+					)
 				)
 
-	return chunks
+	return course_docs, part_docs, chunk_docs
 
+
+def create_chroma_client(persist_dir: Path) -> Any:
+	"""Create a Chroma persistent client."""
+	return PersistentClient(path=str(persist_dir))
+
+
+def reset_collections(persist_dir: Path, collection_names: list[str]) -> None:
+	"""Drop prototype collections to avoid duplicate indexing."""
+	SharedSystemClient.clear_system_cache()
+	client = create_chroma_client(persist_dir)
+	for name in collection_names:
+		try:
+			client.delete_collection(name)
+		except ValueError:
+			pass
+
+
+def upsert_documents(
+	collection: Any,
+	documents: list[Document],
+	id_prefix: str,
+	batch_size: int = 64,
+) -> None:
+	"""Insert notebook-built documents into a Chroma collection in batches."""
+	if not documents:
+		return
+
+	for start in range(0, len(documents), batch_size):
+		batch = documents[start : start + batch_size]
+		ids: list[str] = []
+		texts: list[str] = []
+		metadatas: list[dict[str, Any]] = []
+
+		for offset, doc in enumerate(batch):
+			ids.append(f"{id_prefix}::{start + offset}")
+			texts.append(doc.page_content)
+			metadatas.append(doc.metadata)
+
+		collection.add(ids=ids, documents=texts, metadatas=metadatas)
+
+
+def create_vector_databases(
+	raw_data_dir: Path,
+	persist_dir: Path,
+	embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+	embedding_url: str = DEFAULT_EMBEDDING_URL,
+) -> dict[str, Any]:
+	"""Chunk documents and build course/part/chunk Chroma databases."""
+	persist_dir.mkdir(parents=True, exist_ok=True)
+
+	reset_collections(
+		persist_dir,
+		["prototype_courses", "prototype_parts", "prototype_chunks"],
+	)
+
+	embedding_fn = embedding_functions.OllamaEmbeddingFunction(
+		model_name=embedding_model,
+		url=embedding_url,
+	)
+	client = create_chroma_client(persist_dir)
+
+	course_collection = client.get_or_create_collection(
+		name="prototype_courses",
+		embedding_function=embedding_fn,
+	)
+	part_collection = client.get_or_create_collection(
+		name="prototype_parts",
+		embedding_function=embedding_fn,
+	)
+	chunk_collection = client.get_or_create_collection(
+		name="prototype_chunks",
+		embedding_function=embedding_fn,
+	)
+
+	course_docs, part_docs, chunk_docs = build_documents(raw_data_dir)
+	upsert_documents(course_collection, course_docs, "course")
+	upsert_documents(part_collection, part_docs, "part")
+	upsert_documents(chunk_collection, chunk_docs, "chunk")
+
+	return {
+		"persist_dir": str(persist_dir),
+		"collections": {
+			"course_collection": "prototype_courses",
+			"part_collection": "prototype_parts",
+			"chunk_collection": "prototype_chunks",
+		},
+		"course_count": len(course_docs),
+		"part_count": len(part_docs),
+		"chunk_count": len(chunk_docs),
+	}
+
+
+def parse_args() -> argparse.Namespace:
+	"""Parse CLI arguments for vector database creation."""
+	parser = argparse.ArgumentParser(description="Create Chroma vector databases from raw course files.")
+	parser.add_argument(
+		"--raw-data-dir",
+		type=Path,
+		default=DEFAULT_RAW_DATA_DIR,
+		help="Directory containing source .pdf/.ipynb files.",
+	)
+	parser.add_argument(
+		"--persist-dir",
+		type=Path,
+		default=DEFAULT_PERSIST_DIR,
+		help="Directory where Chroma collections are stored.",
+	)
+	parser.add_argument(
+		"--embedding-model",
+		default=DEFAULT_EMBEDDING_MODEL,
+		help="Embedding model name served by Ollama.",
+	)
+	parser.add_argument(
+		"--embedding-url",
+		default=DEFAULT_EMBEDDING_URL,
+		help="Ollama embeddings endpoint URL.",
+	)
+	return parser.parse_args()
+
+
+def main() -> None:
+	"""CLI entrypoint to build vector DB used by the RAG backend modules."""
+	args = parse_args()
+	raw_data_dir = args.raw_data_dir.resolve()
+	persist_dir = args.persist_dir.resolve()
+
+	if not raw_data_dir.exists():
+		raise FileNotFoundError(f"Raw data directory was not found: {raw_data_dir}")
+
+	result = create_vector_databases(
+		raw_data_dir=raw_data_dir,
+		persist_dir=persist_dir,
+		embedding_model=args.embedding_model,
+		embedding_url=args.embedding_url,
+	)
+	print(json.dumps(result, indent=2, ensure_ascii=True))
+
+
+if __name__ == "__main__":
+	main()

@@ -1,163 +1,253 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator
 
-import pandas as pd
 from chromadb import PersistentClient
 from chromadb.utils import embedding_functions
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama import ChatOllama
+from sentence_transformers import CrossEncoder
 
-try:
-	from .pdf_processor import PROJECT_ROOT, chunk_raw_pdfs
-except ImportError:
-	from pdf_processor import PROJECT_ROOT, chunk_raw_pdfs
-
-DEFAULT_VECTOR_DB_PATH = PROJECT_ROOT / "backend" / "vectordb" / "chroma_db"
-DEFAULT_COLLECTION_NAME = "course_chunks"
-DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
-DEFAULT_OLLAMA_EMBED_URL = "http://localhost:11434/api/embeddings"
-DEFAULT_COURSE_PARTS_OUTPUT = PROJECT_ROOT / "backend" / "rag" / "course_parts.json"
+from .memory import prepare_memory_summary, save_memory_turn
+from .retriever import retrieve_context
 
 
-def _sanitize_for_chroma_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
-	"""Chroma metadata values must be primitive scalar types."""
-	out: Dict[str, Any] = {}
-	for key, value in metadata.items():
-		if value is None:
-			continue
-		if isinstance(value, (str, int, float, bool)):
-			out[key] = value
-		else:
-			out[key] = str(value)
-	return out
+LLM_MODEL = "llama3.1"
+EMBEDDING_MODEL = "nomic-embed-text"
+RERANKER_MODEL = "BAAI/bge-reranker-base"
+EMBEDDING_URL = "http://localhost:11434/api/embeddings"
+
+TOP_K_COURSES = 3
+TOP_K_PARTS = 8
+TOP_K_CHUNKS = 20
+TOP_K_FINAL = 5
+CONTEXT_TOKEN_LIMIT = 5000
+
+MEMORY_MAX_TOKEN_LIMIT = 1200
+MEMORY_SUMMARY_TOKEN_LIMIT = 180
 
 
-def get_embedding_function(
-	model_name: str = DEFAULT_EMBEDDING_MODEL,
-	api_url: str = DEFAULT_OLLAMA_EMBED_URL,
-) -> Any:
-	return embedding_functions.OllamaEmbeddingFunction(
-		model_name=model_name,
-		url=api_url,
+def _ollama_token_ids(text: str) -> list[int]:
+	"""Return stable pseudo token ids for local token budgeting.
+
+	ChatOllama doesn't expose a model tokenizer through LangChain, so we provide
+	a lightweight tokenizer approximation to avoid GPT-2 fallback warnings.
+	"""
+	pieces = re.findall(r"\w+|[^\w\s]", text, flags=re.UNICODE)
+	return list(range(len(pieces)))
+
+
+def create_collections_client(persist_dir: Path) -> Any:
+	"""Create Chroma client for persisted vector DB."""
+	return PersistentClient(path=str(persist_dir))
+
+
+def get_collections(
+	persist_dir: Path,
+	embedding_model: str = EMBEDDING_MODEL,
+	embedding_url: str = EMBEDDING_URL,
+) -> dict[str, Any]:
+	"""Get or create the three retrieval collections."""
+	embedding_fn = embedding_functions.OllamaEmbeddingFunction(
+		model_name=embedding_model,
+		url=embedding_url,
 	)
-
-
-def get_chroma_client(vector_db_path: Optional[str | Path] = None) -> Any:
-	path = Path(vector_db_path) if vector_db_path is not None else DEFAULT_VECTOR_DB_PATH
-	path.mkdir(parents=True, exist_ok=True)
-	return PersistentClient(path=str(path))
-
-
-def build_course_parts_payload(df: pd.DataFrame) -> List[Dict[str, Any]]:
-	if df.empty:
-		return []
-
-	payload: List[Dict[str, Any]] = []
-	grouped = df.groupby("course", dropna=False)
-
-	for course, group in grouped:
-		course_name = str(course).strip() if pd.notna(course) else ""
-		if not course_name:
-			continue
-
-		parts = sorted(
-			{
-				str(value).strip()
-				for value in group["part"].tolist()
-				if isinstance(value, str) and value.strip()
-			}
-		)
-		payload.append({"course": course_name, "parts": parts})
-
-	payload.sort(key=lambda item: item["course"].lower())
-	return payload
-
-
-def write_course_parts_json(
-	df: pd.DataFrame,
-	output_path: Optional[str | Path] = None,
-) -> Path:
-	path = Path(output_path) if output_path is not None else DEFAULT_COURSE_PARTS_OUTPUT
-	path.parent.mkdir(parents=True, exist_ok=True)
-
-	payload = build_course_parts_payload(df)
-	path.write_text(json.dumps(payload, indent=2, ensure_ascii=True), encoding="utf-8")
-	return path
-
-
-def create_vector_database(
-	raw_dir: Optional[str | Path] = None,
-	vector_db_path: Optional[str | Path] = None,
-	collection_name: str = DEFAULT_COLLECTION_NAME,
-	course_parts_output_path: Optional[str | Path] = None,
-	embedding_model_name: str = DEFAULT_EMBEDDING_MODEL,
-	embedding_api_url: str = DEFAULT_OLLAMA_EMBED_URL,
-	reset_collection: bool = True,
-) -> Dict[str, Any]:
-	chunks = chunk_raw_pdfs(raw_dir=raw_dir)
-
-	if not chunks:
-		return {
-			"collection": collection_name,
-			"chunk_count": 0,
-			"courses": 0,
-			"course_parts_path": None,
-			"vector_db_path": str(vector_db_path or DEFAULT_VECTOR_DB_PATH),
-		}
-
-	rows = []
-	for row in chunks:
-		raw_metadata = row.get("metadata")
-		metadata: Dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
-		rows.append(
-			{
-				"id": str(row.get("id", "")),
-				"text": str(row.get("text", "")),
-				"course": str(metadata.get("course", "")).strip(),
-				"part": str(metadata.get("part", "")).strip(),
-				"metadata": metadata,
-			}
-		)
-
-	df = pd.DataFrame(rows)
-	df = df[(df["id"].astype(str).str.len() > 0) & (df["text"].astype(str).str.len() > 0)].copy()
-	df["id"] = df["id"].astype(str)
-
-	chunk_ids = df["id"].tolist()
-	documents = df["text"].tolist()
-	metadatas = [_sanitize_for_chroma_metadata(meta) for meta in df["metadata"].tolist()]
-
-	client = get_chroma_client(vector_db_path=vector_db_path)
-	if reset_collection:
-		try:
-			client.delete_collection(name=collection_name)
-		except Exception:
-			pass
-
-	embedding_fn = get_embedding_function(model_name=embedding_model_name, api_url=embedding_api_url)
-	collection = client.get_or_create_collection(
-		name=collection_name,
-		embedding_function=embedding_fn,
-	)
-
-	collection.upsert(ids=chunk_ids, documents=documents, metadatas=metadatas)
-	parts_path = write_course_parts_json(df, output_path=course_parts_output_path)
+	client = create_collections_client(persist_dir)
 
 	return {
-		"collection": collection_name,
-		"chunk_count": len(chunk_ids),
-		"courses": int(df["course"].nunique(dropna=True)),
-		"course_parts_path": str(parts_path),
-		"vector_db_path": str(vector_db_path or DEFAULT_VECTOR_DB_PATH),
+		"course_collection": client.get_or_create_collection(
+			name="prototype_courses",
+			embedding_function=embedding_fn,
+		),
+		"part_collection": client.get_or_create_collection(
+			name="prototype_parts",
+			embedding_function=embedding_fn,
+		),
+		"chunk_collection": client.get_or_create_collection(
+			name="prototype_chunks",
+			embedding_function=embedding_fn,
+		),
 	}
 
 
-def main() -> None:
-	result = create_vector_database(reset_collection=True)
-	print(json.dumps(result, indent=2, ensure_ascii=True))
+def build_generation_chain(chat_llm: ChatOllama):
+	"""Create the final generation chain."""
+	prompt_template = ChatPromptTemplate.from_template(
+		"""
+You are a Data Science course assistant. You answer student questions using ONLY the provided course context.
+
+INSTRUCTIONS:
+- Give detailed, structured, educational answers.
+- Use only information from the context.
+- Do not hallucinate or add external knowledge.
+- If the answer is not in the context, say:
+  "The answer is not available in the provided course material."
+- If the question is not related to the course, say:
+  "This question is outside the scope of the course material."
+- If the question is unclear, ask for clarification.
+- Do not repeat the context.
+- Keep formulas exactly as written in the context.
+- Cite sources like [1], [2].
+- Use the conversation summary for continuity.
+- Always end your answer with a related follow-up question to help the student continue learning.
+
+INPUTS:
+Conversation Summary:
+{memory_summary}
+
+Context:
+{context}
+
+Question:
+{question}
+""".strip()
+	)
+
+	return prompt_template | chat_llm | StrOutputParser()
 
 
-if __name__ == "__main__":
-	main()
+def _parse_guard_response(raw_output: str) -> dict[str, str]:
+	"""Parse guard LLM output and return a normalized guard decision."""
+	default_message = "Your question is broad or ambiguous. Please narrow it to a specific topic, section, or example."
+	cleaned = raw_output.strip()
+	cleaned = re.sub(r"^```(?:json)?\\s*", "", cleaned, flags=re.IGNORECASE)
+	cleaned = re.sub(r"\\s*```$", "", cleaned)
 
+	try:
+		payload = json.loads(cleaned)
+		status = str(payload.get("status", "")).strip().lower()
+		if status == "ok":
+			return {"status": "ok"}
+		if status in {"needs_clarification", "clarify", "ambiguous", "stop"}:
+			message = str(payload.get("message", "")).strip()
+			return {"status": "stop", "message": message or default_message}
+	except json.JSONDecodeError:
+		pass
+
+	lowered = cleaned.lower()
+	if "needs_clarification" in lowered or "clarify" in lowered or "ambiguous" in lowered:
+		return {"status": "stop", "message": default_message}
+	if '"status"' in lowered and '"ok"' in lowered:
+		return {"status": "ok"}
+
+	# Default open: avoid rejecting valid short prompts when formatting drifts.
+	return {"status": "ok"}
+
+
+def guard_question(question: str, guard_llm: ChatOllama) -> dict[str, str]:
+	"""Use the model to decide if the question needs clarification."""
+	guard_prompt = f"""
+You classify whether a user question is clear enough for retrieval in a data-science learning assistant.
+
+Return JSON only with one of these exact formats:
+{{"status":"ok"}}
+{{"status":"needs_clarification","message":"<one short clarifying request>"}}
+
+Decision rule:
+- Choose "ok" if the question has a concrete topic and can reasonably be answered, even when short.
+- Choose "needs_clarification" only when user intent is genuinely unclear or too broad to answer usefully.
+
+Question:
+{question}
+""".strip()
+
+	response = guard_llm.invoke(guard_prompt)
+	decision = _parse_guard_response(str(response.content))
+	if decision.get("status") == "ok":
+		return {"status": "ok", "question": question}
+
+	return {
+		"status": "stop",
+		"message": decision.get(
+			"message",
+			"Your question is broad or ambiguous. Please narrow it to a specific topic, section, or example.",
+		),
+	}
+
+
+async def generate_stream(
+	question: str,
+	session_id: str = "default",
+	persist_dir: Path | None = None,
+	llm_model: str = LLM_MODEL,
+	reranker_model: str = RERANKER_MODEL,
+) -> AsyncIterator[str]:
+	"""Stream generated answer tokens for the backend API."""
+	guard_llm = ChatOllama(
+		model=llm_model,
+		temperature=0.0,
+		verbose=True,
+		custom_get_token_ids=_ollama_token_ids,
+	)
+	guarded = guard_question(question=question, guard_llm=guard_llm)
+	if guarded.get("status") != "ok":
+		yield guarded.get(
+			"message",
+			"Your question is broad or ambiguous. Please narrow it to a specific topic, section, or example.",
+		)
+		return
+
+	if persist_dir is None:
+		backend_dir = Path(__file__).resolve().parent.parent
+		persist_dir = backend_dir / "vectordb" / "chroma_db"
+
+	chat_llm = ChatOllama(
+		model=llm_model,
+		temperature=0.0,
+		verbose=True,
+		custom_get_token_ids=_ollama_token_ids,
+	)
+	memory_llm = ChatOllama(
+		model=llm_model,
+		temperature=0.0,
+		verbose=True,
+		custom_get_token_ids=_ollama_token_ids,
+	)
+	reranker = CrossEncoder(reranker_model)
+
+	conversation_memory, memory_summary = prepare_memory_summary(
+		session_id=session_id,
+		memory_llm=memory_llm,
+		summary_llm=memory_llm,
+		max_token_limit=MEMORY_MAX_TOKEN_LIMIT,
+		summary_token_limit=MEMORY_SUMMARY_TOKEN_LIMIT,
+	)
+
+	collections = get_collections(persist_dir=persist_dir)
+	retrieved = retrieve_context(
+		question=question,
+		course_collection=collections["course_collection"],
+		part_collection=collections["part_collection"],
+		chunk_collection=collections["chunk_collection"],
+		reranker=reranker,
+		chat_llm=chat_llm,
+		top_k_courses=TOP_K_COURSES,
+		top_k_parts=TOP_K_PARTS,
+		top_k_chunks=TOP_K_CHUNKS,
+		top_k_final=TOP_K_FINAL,
+		context_token_limit=CONTEXT_TOKEN_LIMIT,
+	)
+
+	if retrieved.get("status") != "ok":
+		stop_answer = retrieved.get("message", "I do not have enough information.")
+		yield stop_answer
+		return
+
+	generation_chain = build_generation_chain(chat_llm)
+	chain_input = {
+		"memory_summary": memory_summary,
+		"question": question,
+		"context": retrieved["context"],
+	}
+
+	full_answer = ""
+	async for chunk in generation_chain.astream(chain_input):
+		token = str(chunk)
+		full_answer += token
+		yield token
+
+	save_memory_turn(conversation_memory=conversation_memory, question=question, answer=full_answer)

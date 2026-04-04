@@ -149,6 +149,22 @@ Follow these rules:
 - meaningful variable names
 - avoid deeply nested logic
 - separate data logic from model logic
+- When implementing code check the documentation:
+  - for chromadb :https://docs.trychroma.com/docs
+  - for langchain :https://langchain-doc.readthedocs.io/en/latest/index.html
+  - for ollama : https://docs.ollama.com/api/introduction
+- don't reimplement functionality that is available in libraries (e.g. don't write your own vector search if chromadb provides it)
+- write unit tests for critical functions (e.g. retrieval, reranking)
+- for Data processing, use existing libraries (e.g. PyPDF2 for PDFs, nbformat for notebooks)
+- For the model use this one:
+  - the LLM: llama3.1 (Ollama)
+  - the embedding model: nomic-embed-text (Ollama)
+  - the reranker: bge-reranker-base
+- the vector database: ChromaDB
+- for the LLM, use a prompt template that includes instructions for how to use the retrieved context to answer the question, and include the source attribution information in the prompt so that the LLM can include it in the answer.
+- For the chunking, use a sliding window approach with a chunk size of 500 tokens and an overlap of 100 tokens to ensure that important context is not lost between chunks.
+- Don t break between pages when chunking PDFs, as this can lead to loss of context. Instead, allow chunks to span across page boundaries if necessary.
+- For the retrieval, use cosine similarity on the embeddings to find the most relevant chunks for a given query. You can use the built-in functionality of ChromaDB for this.
 
 Example:
 
