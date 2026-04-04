@@ -45,3 +45,4 @@ backend/rag/telemetry_probe_db
 backend/rag/course_parts.json
 backend/vectordb
 /.conda
+backend/rag/prototype.ipynb

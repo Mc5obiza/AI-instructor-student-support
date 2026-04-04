@@ -6,8 +6,8 @@ from langchain_classic.memory import ConversationSummaryBufferMemory
 
 
 MEMORY_KEY = "conversation_summary"
-MEMORY_MAX_TOKEN_LIMIT = 1200
-MEMORY_SUMMARY_TOKEN_LIMIT = 180
+MEMORY_MAX_TOKEN_LIMIT = 32000
+MEMORY_SUMMARY_TOKEN_LIMIT = 32000
 
 _SESSION_MEMORIES: dict[str, ConversationSummaryBufferMemory] = {}
 
