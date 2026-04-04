@@ -44,3 +44,4 @@ node_modules/
 backend/rag/telemetry_probe_db
 backend/rag/course_parts.json
 backend/vectordb
+/.conda
