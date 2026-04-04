@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from langchain_core.documents import Document
+from langchain_core.tools import tool
 
 
 def query_collection(
@@ -192,4 +193,60 @@ def retrieve_context(
 		"selected_parts": selected_parts,
 		"ranked_docs": ranked_docs,
 		"context": context,
+	}
+
+
+def build_retrieval_tool(
+	course_collection: Any,
+	part_collection: Any,
+	chunk_collection: Any,
+	reranker: Any,
+	chat_llm: Any,
+	top_k_courses: int = 3,
+	top_k_parts: int = 8,
+	top_k_chunks: int = 20,
+	top_k_final: int = 5,
+	context_token_limit: int = 5000,
+) -> Any:
+	"""Create a retrieval tool with bound dependencies for graph/node usage."""
+
+	@tool("rag_retrieval_tool")
+	def rag_retrieval_tool(question: str) -> dict[str, Any]:
+		"""Retrieve, rerank, and compress context for one user question."""
+		return retrieve_context(
+			question=question,
+			course_collection=course_collection,
+			part_collection=part_collection,
+			chunk_collection=chunk_collection,
+			reranker=reranker,
+			chat_llm=chat_llm,
+			top_k_courses=top_k_courses,
+			top_k_parts=top_k_parts,
+			top_k_chunks=top_k_chunks,
+			top_k_final=top_k_final,
+			context_token_limit=context_token_limit,
+		)
+
+	return rag_retrieval_tool
+
+
+def run_retrieval_tool_node(question: str, retrieval_tool: Any) -> dict[str, Any]:
+	"""Execute a bound retrieval tool and return node-friendly state updates."""
+	if not question.strip():
+		return {"status": "stop", "message": "Question is required for retrieval."}
+
+	tool_result = retrieval_tool.invoke({"question": question})
+	if not isinstance(tool_result, dict):
+		return {"status": "stop", "message": "Retrieval tool returned an unexpected response."}
+
+	if tool_result.get("status") != "ok":
+		return {
+			"status": "stop",
+			"message": tool_result.get("message", "I do not have enough retrieved context to answer this reliably."),
+		}
+
+	return {
+		"status": "ok",
+		"retrieved": tool_result,
+		"context": str(tool_result.get("context", "")),
 	}
