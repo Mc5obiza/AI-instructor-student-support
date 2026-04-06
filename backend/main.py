@@ -1,16 +1,44 @@
 from __future__ import annotations
 
+import importlib
 import json
-from typing import AsyncIterator
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import AsyncIterator, Literal, cast
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.security import APIKeyCookie, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from pydantic import BaseModel, EmailStr, Field
 
 try:
 	from backend.rag.generator import generate_stream
 except ImportError:
 	from rag.generator import generate_stream
+
+
+MANAGING_SESSIONS_PATH = Path(__file__).resolve().parent / "managing_sessions"
+if str(MANAGING_SESSIONS_PATH) not in sys.path:
+	sys.path.insert(0, str(MANAGING_SESSIONS_PATH))
+
+UserInterface = importlib.import_module("userInterface").UserInterface
+SessionInterface = importlib.import_module("sessionInterface").SessionInterface
+MessageInterface = importlib.import_module("messageInterface").MessageInterface
+
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-secret-before-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+ACCESS_COOKIE_NAME = "access_token"
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").strip().lower() == "true"
+_raw_samesite = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
+if _raw_samesite not in {"lax", "strict", "none"}:
+	_raw_samesite = "lax"
+COOKIE_SAMESITE = cast(Literal["lax", "strict", "none"], _raw_samesite)
+
+cookie_scheme = APIKeyCookie(name=ACCESS_COOKIE_NAME, auto_error=False)
 
 
 class PromptRequest(BaseModel):
@@ -20,35 +48,217 @@ class PromptRequest(BaseModel):
 	user_id: str | None = Field(default=None, min_length=1)
 
 
-def _resolve_prompt_session(request: PromptRequest) -> tuple[str, str]:
-	"""Normalize request payload to (prompt, session_id)."""
-	prompt = request.prompt.strip()
-	session_id = (request.session_id or request.user_id or "default").strip() or "default"
+class RegisterRequest(BaseModel):
+	username: str = Field(..., min_length=2)
+	email: EmailStr
+	password: str = Field(..., min_length=8)
 
-	if not prompt:
-		raise HTTPException(status_code=400, detail="prompt is required")
 
-	return prompt, session_id
+class CurrentUser(BaseModel):
+	user_id: str
+	email: str
+
+
+def _auth_error(detail: str = "Could not validate credentials") -> HTTPException:
+	return HTTPException(
+		status_code=status.HTTP_401_UNAUTHORIZED,
+		detail=detail,
+		headers={"WWW-Authenticate": "Bearer"},
+	)
+
+
+def _create_access_token(user_id: str, email: str) -> str:
+	expires_at = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+	payload = {"sub": email, "uid": user_id, "exp": expires_at}
+	return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+	response.set_cookie(
+		key=ACCESS_COOKIE_NAME,
+		value=token,
+		httponly=True,
+		secure=COOKIE_SECURE,
+		samesite=COOKIE_SAMESITE,
+		max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+		expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+		path="/",
+	)
+
+
+def _clear_auth_cookie(response: Response) -> None:
+	response.delete_cookie(key=ACCESS_COOKIE_NAME, path="/")
+
+
+def _get_user_id_from_interface(email: str) -> str:
+	result = json.loads(UserInterface().get_user_id(email=email))
+	if str(result.get("status", "")) != "200":
+		raise _auth_error()
+	user_id = str(result.get("user_id", "")).strip()
+	if not user_id:
+		raise _auth_error()
+	return user_id
+
+
+def _resolve_or_create_session_id(prompt: str, request_session_id: str | None, user_id: str) -> str:
+	provided_session_id = (request_session_id or "").strip()
+	if provided_session_id:
+		return provided_session_id
+
+	create_result = json.loads(
+		SessionInterface().create_session(
+			user_id=user_id,
+			date_time=datetime.now(timezone.utc).isoformat(),
+			title=prompt[:80] if prompt else "Chat session",
+		)
+	)
+	if str(create_result.get("status", "")) != "202":
+		raise HTTPException(
+			status_code=500,
+			detail=str(create_result.get("message", "Failed to create session")),
+		)
+
+	session_id = str(create_result.get("session_id", "")).strip()
+	if not session_id:
+		raise HTTPException(status_code=500, detail="Session created without a session_id")
+	return session_id
+
+
+def _store_message_or_raise(session_id: str, content: str, role: str) -> None:
+	result = json.loads(
+		MessageInterface().send_message(session_id=session_id, content=content, role=role)
+	)
+	if str(result.get("status", "")) != "200":
+		raise HTTPException(
+			status_code=500,
+			detail=str(result.get("error", result.get("message", "Failed to store message"))),
+		)
+
+
+def _register_user_or_raise(username: str, email: str, password: str) -> str:
+	register_result = json.loads(
+		UserInterface().add_user(username=username, email=email, password=password)
+	)
+	status_code = str(register_result.get("status", ""))
+	if status_code == "400":
+		raise HTTPException(status_code=409, detail="User already exists")
+	if status_code != "202":
+		raise HTTPException(
+			status_code=500,
+			detail=str(register_result.get("message", "Could not create account")),
+		)
+
+	id_result = json.loads(UserInterface().get_user_id(email=email))
+	if str(id_result.get("status", "")) != "200":
+		raise HTTPException(status_code=500, detail="Account created but user id was not found")
+
+	user_id = str(id_result.get("user_id", "")).strip()
+	if not user_id:
+		raise HTTPException(status_code=500, detail="Account created but user id is missing")
+	return user_id
+
+
+def _verify_login_or_raise(email: str, password: str) -> str:
+	verify_result = json.loads(
+		UserInterface().verify_user(email=email, password=password)
+	)
+	verify_status = str(verify_result.get("status", ""))
+	if verify_status in {"400", "404"}:
+		raise _auth_error("Incorrect email or password")
+	if verify_status != "200":
+		raise HTTPException(
+			status_code=500,
+			detail=str(verify_result.get("message", "Could not verify credentials")),
+		)
+
+	return _get_user_id_from_interface(email)
+
+
+def get_current_user(token: str | None = Depends(cookie_scheme)) -> CurrentUser:
+	if not token:
+		raise _auth_error("Not authenticated")
+
+	try:
+		payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+	except JWTError as exc:
+		raise _auth_error("Invalid or expired token") from exc
+
+	email = str(payload.get("sub", "")).strip().lower()
+	if not email:
+		raise _auth_error()
+	user_id = _get_user_id_from_interface(email)
+	return CurrentUser(user_id=user_id, email=email)
 
 
 def create_app() -> FastAPI:
 	"""Create and configure FastAPI application."""
-	app = FastAPI(title="AI Learning Assistant API", version="1.0.0")
+	app = FastAPI(title="AI Learning Assistant API", version="1.1.0")
 
 	@app.get("/health")
 	async def health() -> dict[str, str]:
 		return {"status": "ok"}
 
+	@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
+	async def register(request: RegisterRequest, response: Response) -> dict[str, str]:
+		username = request.username.strip()
+		email = str(request.email).strip().lower()
+		if not username:
+			raise HTTPException(status_code=400, detail="username is required")
+
+		user_id = _register_user_or_raise(username=username, email=email, password=request.password)
+		token = _create_access_token(user_id=user_id, email=email)
+		_set_auth_cookie(response, token)
+		return {"message": "Account created", "user_id": user_id}
+
+	@app.post("/auth/login")
+	async def login(
+		response: Response,
+		form_data: OAuth2PasswordRequestForm = Depends(),
+	) -> dict[str, str]:
+		email = form_data.username.strip().lower()
+		password = form_data.password
+		if not email or not password:
+			raise HTTPException(status_code=400, detail="email and password are required")
+
+		user_id = _verify_login_or_raise(email=email, password=password)
+		token = _create_access_token(user_id=user_id, email=email)
+		_set_auth_cookie(response, token)
+		return {"message": "Login successful"}
+
+	@app.post("/auth/logout")
+	async def logout(response: Response) -> dict[str, str]:
+		_clear_auth_cookie(response)
+		return {"message": "Logout successful"}
+
 	@app.post("/ask/stream")
-	async def ask_prompt_stream(request: PromptRequest) -> StreamingResponse:
+	async def ask_prompt_stream(
+		request: PromptRequest,
+		current_user: CurrentUser = Depends(get_current_user),
+	) -> StreamingResponse:
 		"""Stream SSE events with token chunks and final status."""
-		prompt, session_id = _resolve_prompt_session(request)
+		prompt = request.prompt.strip()
+		if not prompt:
+			raise HTTPException(status_code=400, detail="prompt is required")
+
+		session_id = _resolve_or_create_session_id(
+			prompt=prompt,
+			request_session_id=request.session_id,
+			user_id=current_user.user_id,
+		)
+		_store_message_or_raise(session_id=session_id, content=prompt, role="user")
 
 		async def event_generator() -> AsyncIterator[str]:
+			assistant_response = ""
 			try:
 				async for token in generate_stream(question=prompt, session_id=session_id):
+					assistant_response += token
 					event = {"type": "token", "token": token}
 					yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+				_store_message_or_raise(
+					session_id=session_id,
+					content=assistant_response,
+					role="assistant",
+				)
 				yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 			except Exception as exc:
 				error_event = {"type": "error", "error": f"Failed to process prompt: {exc}"}
