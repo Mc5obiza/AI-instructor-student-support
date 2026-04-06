@@ -6,9 +6,9 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncIterator, Literal, cast
+from typing import Any, AsyncIterator, Literal, cast
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyCookie, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -32,6 +32,7 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "change-this-secret-before-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 ACCESS_COOKIE_NAME = "access_token"
+CHAT_SESSION_COOKIE_NAME = "chat_session_id"
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").strip().lower() == "true"
 _raw_samesite = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
 if _raw_samesite not in {"lax", "strict", "none"}:
@@ -90,6 +91,23 @@ def _clear_auth_cookie(response: Response) -> None:
 	response.delete_cookie(key=ACCESS_COOKIE_NAME, path="/")
 
 
+def _set_chat_session_cookie(response: Response, session_id: str) -> None:
+	response.set_cookie(
+		key=CHAT_SESSION_COOKIE_NAME,
+		value=session_id,
+		httponly=True,
+		secure=COOKIE_SECURE,
+		samesite=COOKIE_SAMESITE,
+		max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+		expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+		path="/",
+	)
+
+
+def _clear_chat_session_cookie(response: Response) -> None:
+	response.delete_cookie(key=CHAT_SESSION_COOKIE_NAME, path="/")
+
+
 def _get_user_id_from_interface(email: str) -> str:
 	result = json.loads(UserInterface().get_user_id(email=email))
 	if str(result.get("status", "")) != "200":
@@ -100,10 +118,19 @@ def _get_user_id_from_interface(email: str) -> str:
 	return user_id
 
 
-def _resolve_or_create_session_id(prompt: str, request_session_id: str | None, user_id: str) -> str:
+def _resolve_or_create_session_id(
+	prompt: str,
+	request_session_id: str | None,
+	cookie_session_id: str | None,
+	user_id: str,
+) -> str:
 	provided_session_id = (request_session_id or "").strip()
 	if provided_session_id:
 		return provided_session_id
+
+	cached_session_id = (cookie_session_id or "").strip()
+	if cached_session_id:
+		return cached_session_id
 
 	create_result = json.loads(
 		SessionInterface().create_session(
@@ -122,6 +149,74 @@ def _resolve_or_create_session_id(prompt: str, request_session_id: str | None, u
 	if not session_id:
 		raise HTTPException(status_code=500, detail="Session created without a session_id")
 	return session_id
+
+
+def _create_session_or_raise(user_id: str, title: str = "Chat session") -> str:
+	create_result = json.loads(
+		SessionInterface().create_session(
+			user_id=user_id,
+			date_time=datetime.now(timezone.utc).isoformat(),
+			title=title,
+		)
+	)
+	if str(create_result.get("status", "")) != "202":
+		raise HTTPException(
+			status_code=500,
+			detail=str(create_result.get("message", "Failed to create session")),
+		)
+
+	session_id = str(create_result.get("session_id", "")).strip()
+	if not session_id:
+		raise HTTPException(status_code=500, detail="Session created without a session_id")
+	return session_id
+
+
+def _get_sessions_or_raise(user_id: str) -> list[dict[str, Any]]:
+	result_json, sessions = SessionInterface().get_session(user_id=user_id)
+	result = json.loads(result_json)
+	status_code = str(result.get("status", ""))
+
+	if status_code == "404":
+		return []
+	if status_code != "200":
+		raise HTTPException(
+			status_code=500,
+			detail=str(result.get("message", "Failed to fetch sessions")),
+		)
+
+	resolved_sessions = sessions if isinstance(sessions, list) else result.get("sessions", [])
+	if not isinstance(resolved_sessions, list):
+		return []
+
+	clean_sessions: list[dict[str, Any]] = []
+	for item in resolved_sessions:
+		if not isinstance(item, dict):
+			continue
+		session_id = str(item.get("session_id", "")).strip()
+		if not session_id:
+			continue
+		clean_sessions.append(
+			{
+				"session_id": session_id,
+				"title": str(item.get("title", "Chat session")),
+				"updated_at": item.get("updated_at"),
+			}
+		)
+	return clean_sessions
+
+
+def _get_messages_or_raise(session_id: str) -> list[dict[str, Any]]:
+	result = json.loads(SessionInterface().get_messages(session_id=session_id))
+	if str(result.get("status", "")) != "200":
+		raise HTTPException(
+			status_code=500,
+			detail=str(result.get("message", "Failed to fetch messages")),
+		)
+
+	messages = result.get("messages", [])
+	if not isinstance(messages, list):
+		return []
+	return [msg for msg in messages if isinstance(msg, dict)]
 
 
 def _store_message_or_raise(session_id: str, content: str, role: str) -> None:
@@ -228,11 +323,42 @@ def create_app() -> FastAPI:
 	@app.post("/auth/logout")
 	async def logout(response: Response) -> dict[str, str]:
 		_clear_auth_cookie(response)
+		_clear_chat_session_cookie(response)
 		return {"message": "Logout successful"}
+
+	@app.post("/chat/session/new")
+	async def create_new_chat_session(
+		response: Response,
+		current_user: CurrentUser = Depends(get_current_user),
+	) -> dict[str, str]:
+		session_id = _create_session_or_raise(user_id=current_user.user_id)
+		_set_chat_session_cookie(response=response, session_id=session_id)
+		return {"message": "New session created", "session_id": session_id}
+
+	@app.get("/chat/sessions")
+	async def list_chat_sessions(
+		current_user: CurrentUser = Depends(get_current_user),
+	) -> dict[str, Any]:
+		sessions = _get_sessions_or_raise(user_id=current_user.user_id)
+		return {"sessions": sessions}
+
+	@app.get("/chat/session/{session_id}/messages")
+	async def get_chat_session_messages(
+		session_id: str,
+		current_user: CurrentUser = Depends(get_current_user),
+	) -> dict[str, Any]:
+		sessions = _get_sessions_or_raise(user_id=current_user.user_id)
+		allowed_session_ids = {str(item.get("session_id", "")).strip() for item in sessions}
+		if session_id not in allowed_session_ids:
+			raise HTTPException(status_code=404, detail="Session not found")
+
+		messages = _get_messages_or_raise(session_id=session_id)
+		return {"session_id": session_id, "messages": messages}
 
 	@app.post("/ask/stream")
 	async def ask_prompt_stream(
 		request: PromptRequest,
+		http_request: Request,
 		current_user: CurrentUser = Depends(get_current_user),
 	) -> StreamingResponse:
 		"""Stream SSE events with token chunks and final status."""
@@ -243,6 +369,7 @@ def create_app() -> FastAPI:
 		session_id = _resolve_or_create_session_id(
 			prompt=prompt,
 			request_session_id=request.session_id,
+			cookie_session_id=http_request.cookies.get(CHAT_SESSION_COOKIE_NAME),
 			user_id=current_user.user_id,
 		)
 		_store_message_or_raise(session_id=session_id, content=prompt, role="user")
@@ -264,7 +391,7 @@ def create_app() -> FastAPI:
 				error_event = {"type": "error", "error": f"Failed to process prompt: {exc}"}
 				yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
 
-		return StreamingResponse(
+		response = StreamingResponse(
 			event_generator(),
 			media_type="text/event-stream",
 			headers={
@@ -273,6 +400,8 @@ def create_app() -> FastAPI:
 				"X-Accel-Buffering": "no",
 			},
 		)
+		_set_chat_session_cookie(response=response, session_id=session_id)
+		return response
 
 	return app
 
