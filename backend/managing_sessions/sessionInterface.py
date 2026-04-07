@@ -4,6 +4,25 @@ import json
 class SessionInterface:
     def __init__(self):
         self.connector = Connector()
+    def set_title(self, session_id, title):
+        connection = None
+        cursor = None
+        try:
+            connection = self.connector.connect()
+            cursor = connection.cursor()
+            query = f"UPDATE session SET title = {connection.escape(title)}, updated_at = NOW() WHERE id = {connection.escape(session_id)}"
+            cursor.execute(query)
+            connection.commit()
+            print("Session title updated successfully!")
+            return json.dumps({"status": "200", "message": "Session title updated successfully!"})
+        except Exception as e:
+            print(f"Error updating session title: {e}")
+            return json.dumps({"status": "500", "message": "An error occurred while updating the session title"})
+        finally:
+            if cursor:
+                cursor.close()
+            if connection:
+                connection.close()
 
     def get_session(self, user_id):
         connection = None

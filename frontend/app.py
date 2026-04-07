@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import base64
 from typing import Any, Iterator
 
 import requests
 import streamlit as st
+from streamlit_cookies_controller import CookieController  # pyright: ignore[reportMissingImports]
 
 
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
+AUTH_COOKIE_NAME = "access_token"
+CHAT_SESSION_COOKIE_NAME = "chat_session_id"
 
 
 def _api_base(url: str) -> str:
@@ -18,6 +22,21 @@ def _get_http_session() -> requests.Session:
     if "http_session" not in st.session_state:
         st.session_state.http_session = requests.Session()
     return st.session_state.http_session
+
+
+def _get_cookie_controller() -> CookieController:
+    if "cookie_controller" not in st.session_state:
+        st.session_state.cookie_controller = CookieController()
+    return st.session_state.cookie_controller
+
+
+def _refresh_cookie_controller() -> None:
+    controller = _get_cookie_controller()
+    try:
+        controller.refresh()
+    except Exception:
+        # Keep app usable even if the cookie component is temporarily unavailable.
+        pass
 
 
 def _response_detail(response: requests.Response) -> str:
@@ -36,17 +55,160 @@ def _response_detail(response: requests.Response) -> str:
     return response.text or f"HTTP {response.status_code}"
 
 
-def _current_chat_session_id() -> str | None:
+def _session_cookie_value(cookie_name: str) -> str | None:
     session = _get_http_session()
-    cookie_value = session.cookies.get("chat_session_id")
+    cookie_value = session.cookies.get(cookie_name)
     if cookie_value:
         return str(cookie_value)
 
     for cookie in session.cookies:
-        if cookie.name == "chat_session_id" and cookie.value:
+        if cookie.name == cookie_name and cookie.value:
             return str(cookie.value)
 
     return None
+
+
+def _decode_jwt_payload_unverified(token: str) -> dict[str, Any]:
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+
+        payload = parts[1]
+        padding = "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode((payload + padding).encode("utf-8")).decode("utf-8")
+        data = json.loads(decoded)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _set_user_state_from_token(token: str | None) -> None:
+    if not token:
+        st.session_state.pop("auth_token", None)
+        st.session_state.pop("user_email", None)
+        return
+
+    st.session_state.auth_token = token
+    claims = _decode_jwt_payload_unverified(token)
+    email = str(claims.get("sub", "")).strip().lower()
+    if email:
+        st.session_state.user_email = email
+    else:
+        st.session_state.pop("user_email", None)
+
+
+def _browser_cookie_value(cookie_name: str) -> str | None:
+    controller = _get_cookie_controller()
+    raw_value = controller.get(cookie_name)
+    if raw_value is None:
+        return None
+
+    value = str(raw_value).strip()
+    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+        value = value[1:-1].strip()
+    if value.lower().startswith("bearer "):
+        value = value[7:].strip()
+    return value or None
+
+
+def _set_browser_cookie(cookie_name: str, cookie_value: str) -> None:
+    if not cookie_name.strip() or not cookie_value.strip():
+        return
+
+    controller = _get_cookie_controller()
+    controller.set(cookie_name, cookie_value)
+
+
+def _clear_browser_cookie(cookie_name: str) -> None:
+    if not cookie_name.strip():
+        return
+
+    controller = _get_cookie_controller()
+    try:
+        controller.remove(cookie_name)
+    except Exception:
+        pass
+
+
+def _persist_cookie_to_browser(cookie_name: str) -> None:
+    cookie_value = _session_cookie_value(cookie_name)
+    if not cookie_value:
+        return
+
+    if _browser_cookie_value(cookie_name) == cookie_value:
+        return
+
+    _set_browser_cookie(cookie_name=cookie_name, cookie_value=cookie_value)
+
+
+def _sync_cookie_from_browser(cookie_name: str) -> None:
+    if _session_cookie_value(cookie_name):
+        return
+
+    browser_value = _browser_cookie_value(cookie_name)
+    if not browser_value:
+        return
+
+    session = _get_http_session()
+    session.cookies.set(cookie_name, browser_value)
+
+
+def _sync_session_cookies_from_browser() -> None:
+    _sync_cookie_from_browser(AUTH_COOKIE_NAME)
+    _sync_cookie_from_browser(CHAT_SESSION_COOKIE_NAME)
+
+
+def _remove_session_cookie(cookie_name: str) -> None:
+    session = _get_http_session()
+
+    try:
+        session.cookies.pop(cookie_name, None)
+    except Exception:
+        pass
+
+    try:
+        session.cookies.set(cookie_name, "", expires=0)
+    except Exception:
+        pass
+
+
+def restore_auth_from_cookie(base_url: str) -> tuple[bool, str]:
+    _refresh_cookie_controller()
+    _sync_session_cookies_from_browser()
+    auth_token = _session_cookie_value(AUTH_COOKIE_NAME)
+    if not auth_token:
+        _set_user_state_from_token(None)
+        return False, ""
+
+    _set_user_state_from_token(auth_token)
+
+    session = _get_http_session()
+    try:
+        response = session.get(f"{_api_base(base_url)}/chat/sessions", timeout=20)
+    except requests.RequestException as exc:
+        # Keep user logged in while backend connectivity is transiently unavailable.
+        return True, f"Auth check skipped: {exc}"
+
+    if response.ok:
+        return True, ""
+
+    if response.status_code in {401, 403}:
+        _remove_session_cookie(AUTH_COOKIE_NAME)
+        _remove_session_cookie(CHAT_SESSION_COOKIE_NAME)
+        _clear_browser_cookie(AUTH_COOKIE_NAME)
+        _clear_browser_cookie(CHAT_SESSION_COOKIE_NAME)
+        _set_user_state_from_token(None)
+        st.session_state.http_session = requests.Session()
+        _refresh_cookie_controller()
+        return False, _response_detail(response)
+
+    # Do not force logout on non-auth backend errors (5xx, etc.).
+    return True, _response_detail(response)
+
+
+def _current_chat_session_id() -> str | None:
+    return _session_cookie_value(CHAT_SESSION_COOKIE_NAME)
 
 
 def register_user(base_url: str, username: str, email: str, password: str) -> tuple[bool, str]:
@@ -57,6 +219,7 @@ def register_user(base_url: str, username: str, email: str, password: str) -> tu
         timeout=20,
     )
     if response.status_code == 201:
+        _set_user_state_from_token(_session_cookie_value(AUTH_COOKIE_NAME))
         return True, "Account created"
     return False, _response_detail(response)
 
@@ -69,16 +232,19 @@ def login_user(base_url: str, email: str, password: str) -> tuple[bool, str]:
         timeout=20,
     )
     if response.ok:
+        _set_user_state_from_token(_session_cookie_value(AUTH_COOKIE_NAME))
         return True, "Login successful"
     return False, _response_detail(response)
 
 
 def logout_user(base_url: str) -> tuple[bool, str]:
     session = _get_http_session()
-    response = session.post(f"{_api_base(base_url)}/auth/logout", timeout=20)
+    response = session.get(f"{_api_base(base_url)}/logout", timeout=20)
     if response.ok:
         st.session_state.http_session = requests.Session()
-        return True, "Logout successful"
+        _set_user_state_from_token(None)
+        _refresh_cookie_controller()
+        return True, _response_detail(response)
     return False, _response_detail(response)
 
 
@@ -230,6 +396,17 @@ def main() -> None:
 
     backend_url = st.text_input("Backend URL", value=DEFAULT_BACKEND_URL)
 
+    restored_auth, _ = restore_auth_from_cookie(base_url=backend_url)
+    if restored_auth:
+        st.session_state.is_authenticated = True
+    elif st.session_state.is_authenticated and not _session_cookie_value(AUTH_COOKIE_NAME):
+        st.session_state.is_authenticated = False
+
+    if st.session_state.is_authenticated:
+        _persist_cookie_to_browser(AUTH_COOKIE_NAME)
+    if _session_cookie_value(CHAT_SESSION_COOKIE_NAME):
+        _persist_cookie_to_browser(CHAT_SESSION_COOKIE_NAME)
+
     if not st.session_state.is_authenticated:
         login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
 
@@ -250,6 +427,7 @@ def main() -> None:
                     st.session_state.chat_sessions = {}
                     st.session_state.chat_order = []
                     st.session_state.active_session_id = None
+                    _persist_cookie_to_browser(AUTH_COOKIE_NAME)
                     st.success(message)
                     st.rerun()
                 else:
@@ -274,6 +452,7 @@ def main() -> None:
                     st.session_state.chat_sessions = {}
                     st.session_state.chat_order = []
                     st.session_state.active_session_id = None
+                    _persist_cookie_to_browser(AUTH_COOKIE_NAME)
                     st.success(message)
                     st.rerun()
                 else:
@@ -329,6 +508,7 @@ def main() -> None:
             if can_create_new_chat:
                 success, message, session_id = create_new_chat_session(base_url=backend_url)
                 if success:
+                    _persist_cookie_to_browser(CHAT_SESSION_COOKIE_NAME)
                     sync_sessions_from_backend(base_url=backend_url)
                     if session_id and session_id not in st.session_state.chat_sessions:
                         st.session_state.chat_sessions[session_id] = {

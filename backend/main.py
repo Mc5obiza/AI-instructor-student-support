@@ -3,16 +3,23 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, cast
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyCookie, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field
+
+try:
+	from langchain_ollama import ChatOllama
+except Exception:
+	ChatOllama = None
 
 try:
 	from backend.rag.generator import generate_stream
@@ -38,6 +45,21 @@ _raw_samesite = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
 if _raw_samesite not in {"lax", "strict", "none"}:
 	_raw_samesite = "lax"
 COOKIE_SAMESITE = cast(Literal["lax", "strict", "none"], _raw_samesite)
+SESSION_TITLE_MODEL = os.getenv("SESSION_TITLE_MODEL", "llama3.1")
+SESSION_TITLE_MAX_CHARS = int(os.getenv("SESSION_TITLE_MAX_CHARS", "80"))
+_default_frontend_origins = [
+	"http://127.0.0.1:5173",
+	"http://localhost:5173",
+	"http://127.0.0.1:3000",
+	"http://localhost:3000",
+	"http://127.0.0.1:8501",
+	"http://localhost:8501",
+]
+_raw_frontend_origins = os.getenv("FRONTEND_ORIGINS", "")
+if _raw_frontend_origins.strip():
+	FRONTEND_ORIGINS = [origin.strip() for origin in _raw_frontend_origins.split(",") if origin.strip()]
+else:
+	FRONTEND_ORIGINS = _default_frontend_origins
 
 cookie_scheme = APIKeyCookie(name=ACCESS_COOKIE_NAME, auto_error=False)
 
@@ -108,6 +130,121 @@ def _clear_chat_session_cookie(response: Response) -> None:
 	response.delete_cookie(key=CHAT_SESSION_COOKIE_NAME, path="/")
 
 
+def _clear_legacy_session_cookie(response: Response) -> None:
+	response.delete_cookie(key="session_id", path="/")
+
+
+def _clear_logout_cookies(response: Response) -> None:
+	_clear_auth_cookie(response)
+	_clear_chat_session_cookie(response)
+	_clear_legacy_session_cookie(response)
+
+
+def _fallback_session_title(question: str) -> str:
+	clean_question = " ".join(question.split()).strip()
+	if not clean_question:
+		return "New Chat"
+	fallback = " ".join(clean_question.split(" ")[:8]).strip()
+	if len(fallback) > SESSION_TITLE_MAX_CHARS:
+		fallback = fallback[:SESSION_TITLE_MAX_CHARS].rstrip(" ,.;:-")
+	return fallback or "New Chat"
+
+
+def _sanitize_session_title(raw_title: str, fallback_title: str) -> str:
+	cleaned = str(raw_title or "").strip().strip('"').strip("'")
+	cleaned = re.sub(r"^title\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+	cleaned = " ".join(cleaned.split())
+	if not cleaned:
+		cleaned = fallback_title
+	if len(cleaned) > SESSION_TITLE_MAX_CHARS:
+		cleaned = cleaned[:SESSION_TITLE_MAX_CHARS].rstrip(" ,.;:-")
+	return cleaned or fallback_title
+
+
+def _suggest_session_title(question: str, answer: str) -> str:
+	fallback_title = _fallback_session_title(question)
+	if ChatOllama is None:
+		return fallback_title
+
+	prompt = f"""
+Please set a title for this question response.
+Return one short title only.
+Do not include quotes.
+Do not include markdown.
+Keep it under 8 words.
+
+Question: {question}
+Response: {answer}
+""".strip()
+
+	try:
+		title_llm = ChatOllama(model=SESSION_TITLE_MODEL, temperature=0.0, verbose=False)
+		response = title_llm.invoke(prompt)
+		response_text = str(getattr(response, "content", response)).strip()
+		return _sanitize_session_title(response_text, fallback_title)
+	except Exception:
+		return fallback_title
+
+
+def _get_session_message_count(session_id: str) -> int | None:
+	try:
+		result = json.loads(SessionInterface().get_messages(session_id=session_id))
+	except Exception:
+		return None
+
+	if str(result.get("status", "")) != "200":
+		return None
+
+	messages = result.get("messages", [])
+	if not isinstance(messages, list):
+		return None
+	return len(messages)
+
+
+def _is_placeholder_title(title: str | None) -> bool:
+	normalized = str(title or "").strip().lower()
+	return normalized in {"", "new chat", "chat session"}
+
+
+def _get_session_title_for_user(user_id: str, session_id: str) -> str | None:
+	try:
+		sessions = _get_sessions_or_raise(user_id=user_id)
+	except Exception:
+		return None
+
+	for item in sessions:
+		if str(item.get("session_id", "")).strip() == session_id:
+			return str(item.get("title", "")).strip()
+	return None
+
+
+def _set_session_title_after_response(
+	session_id: str,
+	user_id: str,
+	question: str,
+	answer: str,
+	message_count_before_user_message: int | None,
+) -> str | None:
+	current_title = _get_session_title_for_user(user_id=user_id, session_id=session_id)
+	should_update_first_turn = message_count_before_user_message == 0
+	should_update_placeholder = _is_placeholder_title(current_title)
+	if not (should_update_first_turn or should_update_placeholder):
+		return None
+
+	title = _suggest_session_title(question=question, answer=answer)
+	if not title or _is_placeholder_title(title):
+		return None
+
+	try:
+		result = json.loads(SessionInterface().set_title(session_id=session_id, title=title))
+		if str(result.get("status", "")) == "200":
+			return title
+	except Exception:
+		return None
+
+	return None
+
+
 def _get_user_id_from_interface(email: str) -> str:
 	result = json.loads(UserInterface().get_user_id(email=email))
 	if str(result.get("status", "")) != "200":
@@ -136,7 +273,7 @@ def _resolve_or_create_session_id(
 		SessionInterface().create_session(
 			user_id=user_id,
 			date_time=datetime.now(timezone.utc).isoformat(),
-			title=prompt[:80] if prompt else "Chat session",
+			title="New Chat",
 		)
 	)
 	if str(create_result.get("status", "")) != "202":
@@ -151,7 +288,7 @@ def _resolve_or_create_session_id(
 	return session_id
 
 
-def _create_session_or_raise(user_id: str, title: str = "Chat session") -> str:
+def _create_session_or_raise(user_id: str, title: str = "New Chat") -> str:
 	create_result = json.loads(
 		SessionInterface().create_session(
 			user_id=user_id,
@@ -289,6 +426,14 @@ def create_app() -> FastAPI:
 	"""Create and configure FastAPI application."""
 	app = FastAPI(title="AI Learning Assistant API", version="1.1.0")
 
+	app.add_middleware(
+		CORSMiddleware,
+		allow_origins=FRONTEND_ORIGINS,
+		allow_credentials=True,
+		allow_methods=["*"],
+		allow_headers=["*"],
+	)
+
 	@app.get("/health")
 	async def health() -> dict[str, str]:
 		return {"status": "ok"}
@@ -322,9 +467,13 @@ def create_app() -> FastAPI:
 
 	@app.post("/auth/logout")
 	async def logout(response: Response) -> dict[str, str]:
-		_clear_auth_cookie(response)
-		_clear_chat_session_cookie(response)
-		return {"message": "Logout successful"}
+		_clear_logout_cookies(response)
+		return {"message": "Successfully logged out"}
+
+	@app.get("/logout")
+	async def logout_simple(response: Response) -> dict[str, str]:
+		_clear_logout_cookies(response)
+		return {"message": "Successfully logged out"}
 
 	@app.post("/chat/session/new")
 	async def create_new_chat_session(
@@ -372,10 +521,12 @@ def create_app() -> FastAPI:
 			cookie_session_id=http_request.cookies.get(CHAT_SESSION_COOKIE_NAME),
 			user_id=current_user.user_id,
 		)
+		message_count_before_user_message = _get_session_message_count(session_id=session_id)
 		_store_message_or_raise(session_id=session_id, content=prompt, role="user")
 
 		async def event_generator() -> AsyncIterator[str]:
 			assistant_response = ""
+			final_title: str | None = None
 			try:
 				async for token in generate_stream(question=prompt, session_id=session_id):
 					assistant_response += token
@@ -386,7 +537,17 @@ def create_app() -> FastAPI:
 					content=assistant_response,
 					role="assistant",
 				)
-				yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+				final_title = _set_session_title_after_response(
+					session_id=session_id,
+					user_id=current_user.user_id,
+					question=prompt,
+					answer=assistant_response,
+					message_count_before_user_message=message_count_before_user_message,
+				)
+				done_event: dict[str, Any] = {"type": "done"}
+				if final_title:
+					done_event["session_title"] = final_title
+				yield f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"
 			except Exception as exc:
 				error_event = {"type": "error", "error": f"Failed to process prompt: {exc}"}
 				yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"

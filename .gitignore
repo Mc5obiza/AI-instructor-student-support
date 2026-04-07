@@ -46,3 +46,37 @@ backend/rag/course_parts.json
 backend/vectordb
 /.conda
 config
+
+# Frontend artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Python caches and test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environments and tooling
+.venv/
+.python-version
+
+# Databases / vector stores / local model files
+*.sqlite
+*.sqlite3
+*.db
+vectordb/
+models/
+
+# Secrets and keys
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS files
+Thumbs.db
