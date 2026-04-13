@@ -438,4 +438,5 @@ async def stream_orchestrated_response(
 			conversation_memory=conversation_memory,
 			question=question,
 			answer=full_answer,
+			session_id=session_id,
 		)

@@ -2,8 +2,100 @@ from connector import Connector
 from uuid import uuid4
 import json
 class SessionInterface:
+    _summary_column_checked = False
+
     def __init__(self):
         self.connector = Connector()
+
+    def _ensure_summary_column_capacity(self, connection, cursor):
+        if SessionInterface._summary_column_checked:
+            return
+
+        try:
+            cursor.execute(
+                """
+                SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'session'
+                  AND COLUMN_NAME = 'summary'
+                """
+            )
+            column = cursor.fetchone()
+            if not column:
+                SessionInterface._summary_column_checked = True
+                return
+
+            data_type = str(column[0]).lower()
+            max_length = column[1]
+            needs_upgrade = data_type in {"varchar", "char"} and (max_length is None or int(max_length) < 2000)
+            if needs_upgrade:
+                cursor.execute("ALTER TABLE session MODIFY COLUMN summary TEXT NULL")
+                connection.commit()
+                print("Session summary column upgraded to TEXT.")
+
+            SessionInterface._summary_column_checked = True
+        except Exception as e:
+            print(f"Could not verify/upgrade summary column capacity: {e}")
+
+    def set_session_summary(self, session_id, summary):
+        connection = None
+        cursor = None
+        try:
+            connection = self.connector.connect()
+            cursor = connection.cursor()
+            self._ensure_summary_column_capacity(connection=connection, cursor=cursor)
+            query = f"UPDATE session SET summary = {connection.escape(summary)}, updated_at = NOW() WHERE id = {connection.escape(session_id)}"
+            cursor.execute(query)
+            connection.commit()
+            print("Session summary updated successfully!")
+            return json.dumps({"status": "200", "message": "Session summary updated successfully!"})
+        except Exception as e:
+            print(f"Error updating session summary: {e}")
+            return json.dumps({"status": "500", "message": "An error occurred while updating the session summary"})
+        finally:
+            if cursor:
+                cursor.close()
+            if connection:
+                connection.close()
+
+    def get_session_summary(self, session_id):
+        connection = None
+        cursor = None
+        try:
+            connection = self.connector.connect()
+            cursor = connection.cursor()
+            query = f"SELECT summary FROM session WHERE id = {connection.escape(session_id)}"
+            cursor.execute(query)
+            result = cursor.fetchone()
+            if result is None:
+                print("Session does not exist.")
+                return json.dumps({"status": "404", "message": "Session does not exist.", "summary": ""})
+
+            summary = result[0] if result[0] is not None else ""
+            print("Session summary fetched successfully!")
+            return json.dumps(
+                {
+                    "status": "200",
+                    "message": "Session summary fetched successfully!",
+                    "summary": summary,
+                }
+            )
+        except Exception as e:
+            print(f"Error fetching session summary: {e}")
+            return json.dumps(
+                {
+                    "status": "500",
+                    "message": "An error occurred while fetching the session summary",
+                    "summary": "",
+                }
+            )
+        finally:
+            if cursor:
+                cursor.close()
+            if connection:
+                connection.close()
+
     def set_title(self, session_id, title):
         connection = None
         cursor = None
@@ -105,15 +197,17 @@ class SessionInterface:
         try:
             connection = self.connector.connect()
             cursor = connection.cursor()
+            self._ensure_summary_column_capacity(connection=connection, cursor=cursor)
             session, _existing_session_id = self.check_session_exists(user_id)
             if session and json.loads(session)["status"] == "200":
                 print("Session already exists.")
                 return json.dumps({"status": "400", "message": "Session already exists."})
             session_id = str(uuid4())
             query = (
-                f"INSERT INTO session (id, user_id, title, created_at, updated_at) VALUES ("
+                f"INSERT INTO session (id, user_id, title, summary, created_at, updated_at) VALUES ("
                 f"{connection.escape(session_id)}, {connection.escape(user_id)}, "
-                f"{connection.escape(title)}, {connection.escape(date_time)}, {connection.escape(date_time)})"
+                f"{connection.escape(title)}, {connection.escape('')}, "
+                f"{connection.escape(date_time)}, {connection.escape(date_time)})"
             )
             cursor.execute(query)
             connection.commit()

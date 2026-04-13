@@ -67,9 +67,23 @@ INSTRUCTIONS:
 - If the question is unclear, ask for clarification.
 - Do not repeat the context.
 - Keep formulas exactly as written in the context.
+- Whenever your answer includes equations, always format them as LaTeX math (not plain-text equations).
+- For standalone equations, use display math blocks with $$ ... $$.
+- For multiple related equations/steps, write each equation in its own separate display block.
+- Do not put two equations in the same line.
+- Do not combine multiple equations inside one $$ ... $$ block.
+- Do not output formula lines like "m_t = ..." as plain text when LaTeX can be used.
 - Cite sources like [1], [2].
 - Use the conversation summary for continuity.
-- Always end your answer with a related follow-up question to help the student continue learning.
+- First infer user intent from the current Question:
+	- follow_up_answer_intent: the user is replying to the previous follow-up prompt (for example: yes/no, "go ahead", "tell me more", or a short continuation request).
+	- new_question_intent: the user is asking a new standalone question.
+- If intent is follow_up_answer_intent, answer the previous follow-up topic using Conversation Summary + Context, even if the current Question text is short.
+- If intent is new_question_intent, answer the current Question normally.
+- Do not use this prefix: "Follow-up question:".
+- Always end your answer with exactly one line in this format:
+	"Do u want to know about <related follow-up question>?"
+- Replace <related follow-up question> with a real specific question topic; never output angle brackets.
 
 INPUTS:
 Conversation Summary:
@@ -88,7 +102,8 @@ Question:
 
 def _parse_guard_response(raw_output: str) -> dict[str, str]:
 	"""Parse guard LLM output and return a normalized guard decision."""
-	default_message = "Your question is broad or ambiguous. Please narrow it to a specific topic, section, or example."
+	default_clarification_message = "Your question is broad or ambiguous. Please narrow it to a specific topic, section, or example."
+	default_scope_message = "I am designed to assist with Data Science and course-related questions only. Please ask a question related to the course material."
 	cleaned = raw_output.strip()
 	cleaned = re.sub(r"^```(?:json)?\\s*", "", cleaned, flags=re.IGNORECASE)
 	cleaned = re.sub(r"\\s*```$", "", cleaned)
@@ -98,34 +113,43 @@ def _parse_guard_response(raw_output: str) -> dict[str, str]:
 		status = str(payload.get("status", "")).strip().lower()
 		if status == "ok":
 			return {"status": "ok"}
+		if status in {"out_of_scope", "out-of-scope", "not_related", "off_topic", "off-topic"}:
+			message = str(payload.get("message", "")).strip()
+			return {"status": "stop", "message": message or default_scope_message}
 		if status in {"needs_clarification", "clarify", "ambiguous", "stop"}:
 			message = str(payload.get("message", "")).strip()
-			return {"status": "stop", "message": message or default_message}
+			return {"status": "stop", "message": message or default_clarification_message}
 	except json.JSONDecodeError:
 		pass
 
 	lowered = cleaned.lower()
+	if "out_of_scope" in lowered or "outside the scope" in lowered or "off topic" in lowered:
+		return {"status": "stop", "message": default_scope_message}
 	if "needs_clarification" in lowered or "clarify" in lowered or "ambiguous" in lowered:
-		return {"status": "stop", "message": default_message}
+		return {"status": "stop", "message": default_clarification_message}
 	if '"status"' in lowered and '"ok"' in lowered:
 		return {"status": "ok"}
 
-	# Default open: avoid rejecting valid short prompts when formatting drifts.
-	return {"status": "ok"}
+	# Default closed: fail safe to safeguard domain and avoid policy drift.
+	return {"status": "stop", "message": default_scope_message}
 
 
 def guard_question(question: str, guard_llm: ChatOllama) -> dict[str, str]:
-	"""Use the model to decide if the question needs clarification."""
+	"""Use the model to enforce domain scope and question clarity."""
 	guard_prompt = f"""
-You classify whether a user question is clear enough for retrieval in a data-science learning assistant.
+You classify whether a user question is both:
+1) in scope for a Data Science learning assistant, and
+2) clear enough for retrieval.
 
 Return JSON only with one of these exact formats:
 {{"status":"ok"}}
 {{"status":"needs_clarification","message":"<one short clarifying request>"}}
+{{"status":"out_of_scope","message":"I am designed to assist with Data Science and course-related questions only. Please ask a question related to the course material."}}
 
 Decision rule:
-- Choose "ok" if the question has a concrete topic and can reasonably be answered, even when short.
-- Choose "needs_clarification" only when user intent is genuinely unclear or too broad to answer usefully.
+- Choose "ok" only if the question is about Data Science, Machine Learning, AI, Python-for-data, statistics, data analysis, or your indexed course material.
+- Choose "needs_clarification" only when the question is in-scope but genuinely unclear or too broad to answer usefully.
+- Choose "out_of_scope" for unrelated requests (for example: personal reminders, arbitrary secret phrases, general chit-chat, non-course tasks).
 
 Question:
 {question}

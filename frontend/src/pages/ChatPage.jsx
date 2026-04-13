@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Bot,
@@ -26,6 +29,88 @@ function truncateTitle(title) {
     return raw;
   }
   return `${raw.slice(0, 29)}...`;
+}
+
+function isLikelyEquationLine(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (
+    trimmed.includes("$$") ||
+    trimmed.includes("\\begin{") ||
+    trimmed.includes("\\end{") ||
+    trimmed.startsWith("```") ||
+    trimmed.endsWith(":")
+  ) {
+    return false;
+  }
+
+  if (!trimmed.includes("=")) {
+    return false;
+  }
+
+  const hasLeftHandVariable = /(?:\\[A-Za-z]+(?:\{[^{}]*\})*|[A-Za-z][A-Za-z0-9_{}^]*)\s*=/.test(trimmed);
+  const hasMathSignals = /[+\-*/^()]/.test(trimmed) || /_[A-Za-z0-9]/.test(trimmed) || /\\[A-Za-z]+/.test(trimmed);
+  return hasLeftHandVariable && hasMathSignals;
+}
+
+function splitPackedEquations(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed || trimmed.includes("$$") || trimmed.includes("\\begin{") || trimmed.includes("\\end{")) {
+    return [line];
+  }
+
+  const packedMatches = trimmed.match(
+    /(?:\\[A-Za-z]+(?:\{[^{}]*\})*|[A-Za-z][A-Za-z0-9_{}^]*)\s*=\s*.+?(?=(?:\s+(?:\\[A-Za-z]+(?:\{[^{}]*\})*|[A-Za-z][A-Za-z0-9_{}^]*)\s*=)|$)/g,
+  );
+
+  if (packedMatches && packedMatches.length > 1) {
+    return packedMatches.map((item) => item.trim()).filter(Boolean);
+  }
+
+  return [line];
+}
+
+function toDisplayMathBlock(expression) {
+  const trimmed = String(expression || "").trim();
+  return `$$\n${trimmed}\n$$`;
+}
+
+function normalizeMathMarkdown(content) {
+  const text = String(content || "");
+  const lines = text.split(/\r?\n/);
+  const normalized = [];
+
+  for (const line of lines) {
+    const expandedLines = splitPackedEquations(line);
+    if (expandedLines.length > 1) {
+      for (const expanded of expandedLines) {
+        if (isLikelyEquationLine(expanded)) {
+          normalized.push(toDisplayMathBlock(expanded));
+          normalized.push("");
+        } else {
+          normalized.push(expanded);
+        }
+      }
+      continue;
+    }
+
+    const [single] = expandedLines;
+    if (isLikelyEquationLine(single)) {
+      normalized.push(toDisplayMathBlock(single));
+      normalized.push("");
+    } else {
+      normalized.push(single);
+    }
+  }
+
+  while (normalized.length > 0 && normalized[normalized.length - 1] === "") {
+    normalized.pop();
+  }
+
+  return normalized.join("\n");
 }
 
 export default function ChatPage() {
@@ -500,7 +585,9 @@ export default function ChatPage() {
                     {message.role === "user" ? "You" : "Assistant"}
                   </strong>
                   <div className="message-markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{String(message.content || "")}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {normalizeMathMarkdown(String(message.content || ""))}
+                    </ReactMarkdown>
                   </div>
                 </div>
               </motion.div>

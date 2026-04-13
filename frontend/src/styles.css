@@ -532,6 +532,17 @@ body {
   margin: 11px 0;
 }
 
+.message-markdown .katex-display {
+  margin: 12px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.message-markdown .katex {
+  font-size: 1.03em;
+}
+
 .message-markdown th,
 .message-markdown td {
   border: 1px solid rgba(255, 255, 255, 0.14);
