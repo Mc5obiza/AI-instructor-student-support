@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,8 @@ from langchain_ollama import ChatOllama
 
 LLM_MODEL = "llama3.1"
 EMBEDDING_MODEL = "nomic-embed-text"
-EMBEDDING_URL = "http://localhost:11434/api/embeddings"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
+EMBEDDING_URL = os.getenv("OLLAMA_EMBEDDING_URL", f"{OLLAMA_BASE_URL}/api/embeddings")
 
 
 def create_collections_client(persist_dir: Path) -> Any:

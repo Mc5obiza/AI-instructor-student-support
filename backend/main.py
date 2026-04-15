@@ -47,6 +47,7 @@ if _raw_samesite not in {"lax", "strict", "none"}:
 COOKIE_SAMESITE = cast(Literal["lax", "strict", "none"], _raw_samesite)
 SESSION_TITLE_MODEL = os.getenv("SESSION_TITLE_MODEL", "llama3.1")
 SESSION_TITLE_MAX_CHARS = int(os.getenv("SESSION_TITLE_MAX_CHARS", "80"))
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 _default_frontend_origins = [
 	"http://127.0.0.1:5173",
 	"http://localhost:5173",
@@ -178,7 +179,12 @@ Response: {answer}
 """.strip()
 
 	try:
-		title_llm = ChatOllama(model=SESSION_TITLE_MODEL, temperature=0.0, verbose=False)
+		title_llm = ChatOllama(
+			model=SESSION_TITLE_MODEL,
+			temperature=0.0,
+			verbose=False,
+			base_url=OLLAMA_BASE_URL,
+		)
 		response = title_llm.invoke(prompt)
 		response_text = str(getattr(response, "content", response)).strip()
 		return _sanitize_session_title(response_text, fallback_title)
@@ -272,7 +278,6 @@ def _resolve_or_create_session_id(
 	create_result = json.loads(
 		SessionInterface().create_session(
 			user_id=user_id,
-			date_time=datetime.now(timezone.utc).isoformat(),
 			title="New Chat",
 		)
 	)
@@ -292,7 +297,6 @@ def _create_session_or_raise(user_id: str, title: str = "New Chat") -> str:
 	create_result = json.loads(
 		SessionInterface().create_session(
 			user_id=user_id,
-			date_time=datetime.now(timezone.utc).isoformat(),
 			title=title,
 		)
 	)

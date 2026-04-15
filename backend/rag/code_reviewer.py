@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 
 LLM_MODEL = "llama3.1"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 REVIEW_TIMEOUT_SECONDS = 5
 PYLINT_TIMEOUT_SECONDS = 20
 COMPLEXITY_THRESHOLD = 10
@@ -503,7 +504,12 @@ def extract_code_review_request_with_function_call(
 	previous_code = get_last_reviewed_code(session_id=session_id)
 	previous_code_excerpt = _compact_text(previous_code, 1200) if previous_code else ""
 
-	planner_llm = ChatOllama(model=llm_model, temperature=0.0, verbose=False)
+	planner_llm = ChatOllama(
+		model=llm_model,
+		temperature=0.0,
+		verbose=False,
+		base_url=OLLAMA_BASE_URL,
+	)
 	bound_planner = planner_llm.bind_tools([CodeReviewExtraction])
 	planner_prompt = f"""
 You are extracting a structured Python code-review request.
@@ -710,7 +716,12 @@ def get_code_reviewer_router_context(
 			"last_code_excerpt": "",
 		}
 
-	chat_llm = ChatOllama(model=llm_model, temperature=0.0, verbose=False)
+	chat_llm = ChatOllama(
+		model=llm_model,
+		temperature=0.0,
+		verbose=False,
+		base_url=OLLAMA_BASE_URL,
+	)
 	conversation_memory = get_or_create_code_review_memory(session_id=session_id, llm=chat_llm)
 	memory_summary = load_code_review_summary(conversation_memory=conversation_memory, llm=chat_llm)
 	last_code_excerpt = _compact_text(get_last_reviewed_code(session_id=session_id), 1200)
@@ -740,7 +751,12 @@ def code_reviewer_tool(
 	static_report = run_static_analysis(user_code)
 	execution_report = execute_code_sandbox(user_code)
 
-	chat_llm = ChatOllama(model=llm_model, temperature=0.0, verbose=False)
+	chat_llm = ChatOllama(
+		model=llm_model,
+		temperature=0.0,
+		verbose=False,
+		base_url=OLLAMA_BASE_URL,
+	)
 	conversation_memory = get_or_create_code_review_memory(session_id=session_id, llm=chat_llm)
 	memory_summary = load_code_review_summary(conversation_memory=conversation_memory, llm=chat_llm)
 	code_history = format_code_review_history(session_id=session_id)

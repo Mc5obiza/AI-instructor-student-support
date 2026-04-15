@@ -23,7 +23,24 @@ const USER_EMAIL_COOKIE = "frontend_user_email";
 
 function normalizeBackendUrl(rawUrl) {
   const value = String(rawUrl || "").trim();
-  return value || DEFAULT_BACKEND_URL;
+  const candidate = value || DEFAULT_BACKEND_URL;
+
+  try {
+    const parsed = new URL(candidate);
+    if (typeof window !== "undefined") {
+      const frontendHost = String(window.location.hostname || "").trim();
+      const isFrontendLoopback = frontendHost === "localhost" || frontendHost === "127.0.0.1";
+      const isBackendLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
+
+      // Keep frontend/backend on the same loopback host to ensure auth cookies are sent.
+      if (isFrontendLoopback && isBackendLoopback && parsed.hostname !== frontendHost) {
+        parsed.hostname = frontendHost;
+      }
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return candidate;
+  }
 }
 
 export function AuthProvider({ children }) {

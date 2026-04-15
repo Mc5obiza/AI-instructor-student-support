@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,8 @@ except ImportError:
 CHUNK_SIZE_TOKENS = 500
 CHUNK_OVERLAP_TOKENS = 100
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
-DEFAULT_EMBEDDING_URL = "http://localhost:11434/api/embeddings"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
+DEFAULT_EMBEDDING_URL = os.getenv("OLLAMA_EMBEDDING_URL", f"{OLLAMA_BASE_URL}/api/embeddings")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 DEFAULT_PERSIST_DIR = PROJECT_ROOT / "backend" / "vectordb" / "chroma_db"

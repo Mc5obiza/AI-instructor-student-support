@@ -109,3 +109,42 @@ flowchart TD
 ---
 
 This project is designed to showcase production-minded AI engineering: retrieval-grounded generation, explicit orchestration, memory-aware dialogue, and end-to-end persistence under a local-first deployment model.
+
+## 6. Docker Deployment
+
+You can run the full stack (frontend + backend + MariaDB + Ollama) with Docker Compose.
+
+### Configure secrets
+
+Create a local env file from the template and set your real values:
+
+```bash
+cp .env.example .env
+```
+
+The `.env` file is ignored by git, so secrets stay out of source control.
+
+### Start services
+
+```bash
+docker compose up --build -d
+```
+
+### Pull required Ollama models (first run only)
+
+```bash
+docker compose exec ollama ollama pull llama3.1
+docker compose exec ollama ollama pull nomic-embed-text
+```
+
+### Access apps
+
+- Frontend: http://localhost:5173
+- Backend API health: http://localhost:8000/health
+- Ollama API: http://localhost:11434
+
+### Stop services
+
+```bash
+docker compose down
+```

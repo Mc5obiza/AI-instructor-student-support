@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, AsyncIterator, TypedDict, cast
@@ -26,6 +27,7 @@ except ImportError:
 
 LLM_MODEL = "llama3.1"
 RERANKER_MODEL = "BAAI/bge-reranker-base"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 
 TOP_K_COURSES = 3
 TOP_K_PARTS = 8
@@ -135,6 +137,7 @@ def choose_orchestration_route(
 		model=llm_model,
 		temperature=0.0,
 		verbose=False,
+		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
 	router_prompt = f"""
@@ -239,18 +242,21 @@ def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
 		model=llm_model,
 		temperature=0.0,
 		verbose=True,
+		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
 	guard_llm = ChatOllama(
 		model=llm_model,
 		temperature=0.0,
 		verbose=True,
+		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
 	memory_llm = ChatOllama(
 		model=llm_model,
 		temperature=0.0,
 		verbose=True,
+		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
 

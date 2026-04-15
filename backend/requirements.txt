@@ -1,0 +1,24 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+bcrypt
+chromadb
+email-validator
+fastapi
+langchain
+langchain-classic
+langchain-core
+langchain-ollama
+langchain-text-splitters
+langgraph
+nbformat
+numpy
+pydantic
+pylint
+pymysql
+pypdf
+python-jose[cryptography]
+python-multipart
+radon
+sentence-transformers
+torch==2.5.1+cpu
+uvicorn[standard]

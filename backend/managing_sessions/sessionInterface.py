@@ -191,7 +191,7 @@ class SessionInterface:
             if connection:
                 connection.close()
 
-    def create_session(self, user_id,date_time,title):
+    def create_session(self, user_id, title):
         connection = None
         cursor = None
         try:
@@ -207,7 +207,7 @@ class SessionInterface:
                 f"INSERT INTO session (id, user_id, title, summary, created_at, updated_at) VALUES ("
                 f"{connection.escape(session_id)}, {connection.escape(user_id)}, "
                 f"{connection.escape(title)}, {connection.escape('')}, "
-                f"{connection.escape(date_time)}, {connection.escape(date_time)})"
+                f"UTC_TIMESTAMP(), UTC_TIMESTAMP())"
             )
             cursor.execute(query)
             connection.commit()
