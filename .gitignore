@@ -80,3 +80,6 @@ models/
 
 # OS files
 Thumbs.db
+
+# omori el 5asa
+backend/rag/prototype.ipynb
