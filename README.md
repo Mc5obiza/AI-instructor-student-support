@@ -20,6 +20,8 @@ The retrieval subsystem is intentionally multi-stage and hierarchical:
 - Coarse course-level narrowing
 - Section-level narrowing
 - Dense chunk-level semantic retrieval
+- Lightweight BM25 ranking over chunk text
+- Reciprocal Rank Fusion (RRF) to merge semantic and BM25 signals
 - Cross-encoder reranking with bge-reranker-base
 - Context compression before final generation
 
@@ -36,7 +38,7 @@ The platform is built around a LangGraph router node that dispatches each query 
 - **RAG path** for grounded course-content QA
 - **Code reviewer path** for code explanation, debugging, and follow-up code edits
 
-For RAG, the system performs hierarchical retrieval over three Chroma collections (`course`, `part`, `chunk`), gathers top semantic candidates (top-25 design target), reranks to top-5 with `bge-reranker-base`, compresses context when needed, and then prompts `llama3.1` for final grounded response generation.
+For RAG, the system performs hierarchical retrieval over three Chroma collections (`course`, `part`, `chunk`), gathers top semantic candidates (top-25 design target), adds a lightweight internal BM25 ranking step, fuses semantic and BM25 rankings via RRF, reranks to top-5 with `bge-reranker-base`, compresses context when needed, and then prompts `llama3.1` for final grounded response generation.
 
 FastAPI streams token outputs over SSE, while user accounts, sessions, titles, message history, and memory summaries are persisted through the backend session management layer backed by MariaDB.
 

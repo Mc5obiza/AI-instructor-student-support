@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
+from math import log
 from typing import Any
 
 from langchain_core.documents import Document
@@ -33,12 +35,163 @@ def query_collection(
 	]
 
 
+ENGLISH_STOPWORDS = {
+	"a",
+	"an",
+	"and",
+	"are",
+	"as",
+	"at",
+	"be",
+	"by",
+	"for",
+	"from",
+	"has",
+	"he",
+	"in",
+	"is",
+	"it",
+	"its",
+	"of",
+	"on",
+	"that",
+	"the",
+	"to",
+	"was",
+	"were",
+	"will",
+	"with",
+}
+
+
 def normalize_retrieval_query(question: str) -> str:
 	"""Normalize retrieval query without stripping punctuation."""
 	normalized = question.lower().replace("\r\n", "\n").replace("\r", "\n")
 	normalized = re.sub(r"\s*\n+\s*", " ", normalized)
 	normalized = re.sub(r"\s+", " ", normalized).strip()
 	return normalized or question.strip()
+
+
+def tokenize_text(text: str, remove_stopwords: bool = True) -> list[str]:
+	"""Tokenize text for BM25 scoring and optionally remove English stopwords."""
+	tokens = re.findall(r"\b\w+\b", text.lower())
+	if remove_stopwords:
+		return [token for token in tokens if token not in ENGLISH_STOPWORDS]
+	return tokens
+
+
+def document_key(doc: Document) -> str:
+	"""Build a stable key for a retrieved document across rankings."""
+	meta = doc.metadata or {}
+	return "|".join(
+		[
+			str(meta.get("course", "")),
+			str(meta.get("section", "")),
+			str(meta.get("source_file", "")),
+			str(meta.get("chunk_id", "")),
+			str(doc.page_content[:128]),
+		]
+	)
+
+
+def get_collection_documents(collection: Any, where: dict[str, Any] | None = None) -> list[Document]:
+	"""Load all documents for a collection, optionally filtering by metadata."""
+	try:
+		result = collection.get(include=["documents", "metadatas"])
+		documents = result.get("documents", [])
+		metadatas = result.get("metadatas", [])
+		if documents and isinstance(documents[0], list):
+			documents = documents[0]
+		if metadatas and isinstance(metadatas[0], list):
+			metadatas = metadatas[0]
+		loaded = [
+			Document(page_content=str(doc_text or ""), metadata=metadata or {})
+			for doc_text, metadata in zip(documents, metadatas)
+		]
+		if where is None:
+			return loaded
+		return [doc for doc in loaded if all(doc.metadata.get(k) == v for k, v in where.items())]
+	except Exception:
+		return []
+
+
+def compute_bm25_idf(documents: list[list[str]]) -> dict[str, float]:
+	"""Compute BM25 inverse document frequency values."""
+	n_documents = len(documents)
+	df: dict[str, int] = {}
+	for doc_tokens in documents:
+		for token in set(doc_tokens):
+			df[token] = df.get(token, 0) + 1
+	return {
+		token: log((n_documents - freq + 0.5) / (freq + 0.5) + 1)
+		for token, freq in df.items()
+	}
+
+
+def bm25_score(
+	query_terms: list[str],
+	doc_terms: list[str],
+	idf: dict[str, float],
+	avgdl: float,
+	k1: float = 1.5,
+	b: float = 0.75,
+) -> float:
+	"""Score a document using BM25 for the given query terms."""
+	doc_freq = Counter(doc_terms)
+	dl = len(doc_terms)
+	if dl == 0:
+		return 0.0
+	score = 0.0
+	for term in query_terms:
+		if term not in idf:
+			continue
+		freq = doc_freq.get(term, 0)
+		if freq <= 0:
+			continue
+		score += idf[term] * ((freq * (k1 + 1)) / (freq + k1 * (1 - b + b * dl / avgdl)))
+	return score
+
+
+def bm25_retrieve_documents(
+	collection: Any,
+	question: str,
+	n_results: int,
+	where: dict[str, Any] | None = None,
+) -> list[Document]:
+	"""Retrieve documents using BM25 ranking from a Chroma collection."""
+	candidates = get_collection_documents(collection, where=where)
+	if not candidates:
+		return []
+	query_terms = tokenize_text(question)
+	if not query_terms:
+		return candidates[:n_results]
+	doc_tokens = [tokenize_text(doc.page_content) for doc in candidates]
+	idf = compute_bm25_idf(doc_tokens)
+	avgdl = sum(len(tokens) for tokens in doc_tokens) / max(1, len(doc_tokens))
+	scores = [bm25_score(query_terms, tokens, idf, avgdl) for tokens in doc_tokens]
+	indexed = sorted(
+		zip(scores, candidates),
+		key=lambda pair: pair[0],
+		reverse=True,
+	)
+	return [doc for score, doc in indexed][:n_results]
+
+
+def fuse_rankings_by_rrf(
+	rankings: list[list[Document]],
+	top_k: int,
+	constant: int = 60,
+) -> list[Document]:
+	"""Fuse multiple ranked lists using Reciprocal Rank Fusion."""
+	scores: dict[str, float] = defaultdict(float)
+	documents: dict[str, Document] = {}
+	for ranking in rankings:
+		for rank, doc in enumerate(ranking, start=1):
+			key = document_key(doc)
+			documents.setdefault(key, doc)
+			scores[key] += 1.0 / (constant + rank)
+	ordered_keys = sorted(scores, key=lambda key: (-scores[key], key))
+	return [documents[key] for key in ordered_keys[:top_k]]
 
 
 def rerank_documents(
@@ -153,27 +306,41 @@ def retrieve_context(
 	top_global_course = str(global_chunk_hits[0].metadata.get("course", "")).strip()
 	selected_course = top_global_course
 	if not selected_course:
-		course_hits = query_collection(course_collection, retrieval_question, top_k_courses)
+		course_hits = bm25_retrieve_documents(course_collection, retrieval_question, top_k_courses)
+		if not course_hits:
+			course_hits = query_collection(course_collection, retrieval_question, top_k_courses)
 		selected_course = course_hits[0].page_content if course_hits else ""
 	if not selected_course:
 		return {"status": "stop", "message": "No indexed course matched this question."}
 
-	part_hits = query_collection(
+	part_hits = bm25_retrieve_documents(
 		part_collection,
 		retrieval_question,
 		top_k_parts,
 		where={"course": selected_course},
 	)
-	selected_parts = [doc.page_content for doc in part_hits]
-
-	chunk_hits = [doc for doc in global_chunk_hits if doc.metadata.get("course") == selected_course]
-	if not chunk_hits:
-		chunk_hits = query_collection(
-			chunk_collection,
+	if not part_hits:
+		part_hits = query_collection(
+			part_collection,
 			retrieval_question,
-			top_k_chunks,
+			top_k_parts,
 			where={"course": selected_course},
 		)
+	selected_parts = [doc.page_content for doc in part_hits]
+
+	chunk_semantic_hits = query_collection(
+		chunk_collection,
+		retrieval_question,
+		top_k_chunks,
+		where={"course": selected_course},
+	)
+	chunk_bm25_hits = bm25_retrieve_documents(
+		chunk_collection,
+		retrieval_question,
+		top_k_chunks,
+		where={"course": selected_course},
+	)
+	chunk_hits = fuse_rankings_by_rrf([chunk_semantic_hits, chunk_bm25_hits], top_k=top_k_chunks)
 
 	if selected_parts:
 		part_set = set(selected_parts)
