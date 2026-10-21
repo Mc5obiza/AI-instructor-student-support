@@ -57,6 +57,9 @@ pnpm-debug.log*
 
 # Python caches and test artifacts
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/

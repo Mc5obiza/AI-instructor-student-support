@@ -112,6 +112,40 @@ flowchart TD
 
 This project is designed to showcase production-minded AI engineering: retrieval-grounded generation, explicit orchestration, memory-aware dialogue, and end-to-end persistence under a local-first deployment model.
 
+## Testing
+
+The default test suite uses deterministic in-memory vector collections and mocked model/API boundaries. It does not connect to MariaDB, call Ollama, download models, or read the persisted production vector database.
+
+Activate the project environment from the repository root before installing test tools or running Python:
+
+```powershell
+conda activate agents_env
+```
+
+Install the test dependencies when setting up the environment:
+
+```powershell
+python -m pip install -r requirements-test.txt
+```
+
+Run the complete suite or one category:
+
+```powershell
+pytest
+pytest -m unit
+pytest -m integration
+pytest -m feature
+pytest -m e2e
+```
+
+Generate a coverage report for the retrieval, document-processing, orchestration, API, and auth modules:
+
+```powershell
+pytest --cov=backend.rag.retriever --cov=backend.rag.pdf_processor --cov=backend.rag.notebook_processor --cov=backend.rag.orchestrator --cov=backend.helper --cov=backend.main --cov-report=term-missing --cov-report=html
+```
+
+The optional HTML report is written to `htmlcov/`. Real-model and live-database tests are intentionally not part of the default suite; add explicit infrastructure configuration before running those checks.
+
 ## 6. Docker Deployment
 
 You can run the full stack (frontend + backend + MariaDB + Ollama) with Docker Compose.

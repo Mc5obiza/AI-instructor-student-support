@@ -132,8 +132,9 @@ def _fallback_session_title(question: str) -> str:
 
 
 def _sanitize_session_title(raw_title: str, fallback_title: str) -> str:
-	cleaned = str(raw_title or "").strip().strip('"').strip("'")
+	cleaned = str(raw_title or "").strip()
 	cleaned = re.sub(r"^title\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+	cleaned = cleaned.strip().strip('"').strip("'")
 	cleaned = " ".join(cleaned.split())
 	if not cleaned:
 		cleaned = fallback_title
