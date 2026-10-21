@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, AsyncIterator, TypedDict, cast
 
-from langchain_ollama import ChatOllama
 from langgraph.graph import END, START, StateGraph
 from sentence_transformers import CrossEncoder
 
 try:
+	from backend.llm_clients import DEFAULT_LLM_MODEL, create_chat_client
 	from backend.rag.code_reviewer import (
 		get_code_reviewer_router_context,
 		run_code_reviewer_tool_from_query,
@@ -19,15 +18,15 @@ try:
 	from backend.rag.rag_agent import build_generation_chain, get_collections, guard_question
 	from backend.rag.retriever import build_retrieval_tool, run_retrieval_tool_node
 except ImportError:
+	from llm_clients import DEFAULT_LLM_MODEL, create_chat_client
 	from rag.code_reviewer import get_code_reviewer_router_context, run_code_reviewer_tool_from_query
 	from rag.memory import prepare_memory_summary, save_memory_turn
 	from rag.rag_agent import build_generation_chain, get_collections, guard_question
 	from rag.retriever import build_retrieval_tool, run_retrieval_tool_node
 
 
-LLM_MODEL = "llama3.1"
+LLM_MODEL = DEFAULT_LLM_MODEL
 RERANKER_MODEL = "BAAI/bge-reranker-base"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 
 TOP_K_COURSES = 3
 TOP_K_PARTS = 8
@@ -133,11 +132,10 @@ def choose_orchestration_route(
 	previous_route = _get_previous_session_route(session_id)
 	router_context = get_code_reviewer_router_context(session_id=session_id, llm_model=llm_model)
 
-	router_llm = ChatOllama(
+	router_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=False,
-		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
 	router_prompt = f"""
@@ -238,25 +236,22 @@ def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
 		backend_dir = Path(__file__).resolve().parent.parent
 		persist_dir = backend_dir / "vectordb" / "chroma_db"
 
-	chat_llm = ChatOllama(
+	chat_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=True,
-		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
-	guard_llm = ChatOllama(
+	guard_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=True,
-		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
-	memory_llm = ChatOllama(
+	memory_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=True,
-		base_url=OLLAMA_BASE_URL,
 		custom_get_token_ids=_ollama_token_ids,
 	)
 

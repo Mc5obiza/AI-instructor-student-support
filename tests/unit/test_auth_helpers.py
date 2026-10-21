@@ -264,7 +264,7 @@ def test_title_model_fallback_and_logout_cookie_clearing(
 ) -> None:
     from fastapi import Response
 
-    monkeypatch.setattr(helper, "ChatOllama", None)
+    monkeypatch.setattr(helper, "create_chat_client", None)
     assert helper._suggest_session_title("Explain a mean", "Averages values.") == "Explain a mean"
 
     response = Response()

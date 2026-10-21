@@ -61,7 +61,7 @@ def test_choose_route_uses_model_decision_and_fails_safe(monkeypatch: pytest.Mon
         def invoke(self, _: str) -> Any:
             return type("Response", (), {"content": '{"route":"code_reviewer"}'})()
 
-    monkeypatch.setattr(orchestrator, "ChatOllama", Router)
+    monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: Router())
     assert orchestrator.choose_orchestration_route("Fix this function", session_id="route-test") == (
         "code_reviewer"
     )
@@ -70,7 +70,7 @@ def test_choose_route_uses_model_decision_and_fails_safe(monkeypatch: pytest.Mon
         def invoke(self, _: str) -> Any:
             raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr(orchestrator, "ChatOllama", BrokenRouter)
+    monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: BrokenRouter())
     assert orchestrator.choose_orchestration_route("What is a mean?", session_id="route-error") == "rag"
 
 
@@ -90,7 +90,7 @@ def test_code_followup_keeps_previous_reviewer_route(monkeypatch: pytest.MonkeyP
         def invoke(self, _: str) -> Any:
             return type("Response", (), {"content": '{"route":"rag"}'})()
 
-    monkeypatch.setattr(orchestrator, "ChatOllama", Router)
+    monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: Router())
 
     assert orchestrator.choose_orchestration_route(
         "Can you change the function?",
@@ -134,7 +134,7 @@ def test_rag_node_stops_when_guard_rejects_question(monkeypatch: pytest.MonkeyPa
         def __init__(self, **_: Any) -> None:
             pass
 
-    monkeypatch.setattr(orchestrator, "ChatOllama", Chat)
+    monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: Chat())
     monkeypatch.setattr(
         orchestrator,
         "guard_question",
@@ -156,7 +156,7 @@ def test_rag_node_passes_retrieved_context_to_graph_state(monkeypatch: pytest.Mo
     class RetrievalTool:
         pass
 
-    monkeypatch.setattr(orchestrator, "ChatOllama", Chat)
+    monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: Chat())
     monkeypatch.setattr(orchestrator, "guard_question", lambda **_: {"status": "ok"})
     monkeypatch.setattr(
         orchestrator,
@@ -201,7 +201,7 @@ def test_rag_node_stops_when_retrieval_has_no_relevant_context(
         def __init__(self, **_: Any) -> None:
             pass
 
-    monkeypatch.setattr(orchestrator, "ChatOllama", Chat)
+    monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: Chat())
     monkeypatch.setattr(orchestrator, "guard_question", lambda **_: {"status": "ok"})
     monkeypatch.setattr(orchestrator, "prepare_memory_summary", lambda **_: (object(), ""))
     monkeypatch.setattr(orchestrator, "CrossEncoder", lambda _: "reranker")

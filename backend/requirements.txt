@@ -8,6 +8,7 @@ langchain
 langchain-classic
 langchain-core
 langchain-ollama
+langchain-openai
 langchain-text-splitters
 langgraph
 nbformat
@@ -18,6 +19,7 @@ pymysql
 pypdf
 python-jose[cryptography]
 python-multipart
+python-dotenv
 radon
 sentence-transformers
 torch==2.5.1+cpu

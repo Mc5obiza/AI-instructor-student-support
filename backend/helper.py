@@ -15,9 +15,13 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 
 try:
-	from langchain_ollama import ChatOllama
-except Exception:
-	ChatOllama = None
+	from backend.llm_clients import DEFAULT_LLM_MODEL, create_chat_client
+except ImportError:
+	try:
+		from llm_clients import DEFAULT_LLM_MODEL, create_chat_client
+	except ImportError:
+		DEFAULT_LLM_MODEL = "llama3.1"
+		create_chat_client = None
 
 
 MANAGING_SESSIONS_PATH = Path(__file__).resolve().parent / "managing_sessions"
@@ -38,9 +42,8 @@ _raw_samesite = os.getenv("COOKIE_SAMESITE", "lax").strip().lower()
 if _raw_samesite not in {"lax", "strict", "none"}:
 	_raw_samesite = "lax"
 COOKIE_SAMESITE = cast(Literal["lax", "strict", "none"], _raw_samesite)
-SESSION_TITLE_MODEL = os.getenv("SESSION_TITLE_MODEL", "llama3.1")
+SESSION_TITLE_MODEL = os.getenv("SESSION_TITLE_MODEL", DEFAULT_LLM_MODEL)
 SESSION_TITLE_MAX_CHARS = int(os.getenv("SESSION_TITLE_MAX_CHARS", "80"))
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 _default_frontend_origins = [
 	"http://127.0.0.1:5173",
 	"http://localhost:5173",
@@ -145,7 +148,7 @@ def _sanitize_session_title(raw_title: str, fallback_title: str) -> str:
 
 def _suggest_session_title(question: str, answer: str) -> str:
 	fallback_title = _fallback_session_title(question)
-	if ChatOllama is None:
+	if create_chat_client is None:
 		return fallback_title
 
 	prompt = f"""
@@ -160,11 +163,10 @@ Response: {answer}
 """.strip()
 
 	try:
-		title_llm = ChatOllama(
+		title_llm = create_chat_client(
 			model=SESSION_TITLE_MODEL,
 			temperature=0.0,
 			verbose=False,
-			base_url=OLLAMA_BASE_URL,
 		)
 		response = title_llm.invoke(prompt)
 		response_text = str(getattr(response, "content", response)).strip()

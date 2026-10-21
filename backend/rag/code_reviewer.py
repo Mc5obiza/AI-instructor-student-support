@@ -13,12 +13,15 @@ from typing import Any, Literal, cast
 
 from langchain_classic.memory import ConversationSummaryBufferMemory
 from langchain_core.tools import tool
-from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
+try:
+	from backend.llm_clients import DEFAULT_LLM_MODEL, create_chat_client
+except ImportError:
+	from llm_clients import DEFAULT_LLM_MODEL, create_chat_client
 
-LLM_MODEL = "llama3.1"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
+
+LLM_MODEL = DEFAULT_LLM_MODEL
 REVIEW_TIMEOUT_SECONDS = 5
 PYLINT_TIMEOUT_SECONDS = 20
 COMPLEXITY_THRESHOLD = 10
@@ -504,11 +507,10 @@ def extract_code_review_request_with_function_call(
 	previous_code = get_last_reviewed_code(session_id=session_id)
 	previous_code_excerpt = _compact_text(previous_code, 1200) if previous_code else ""
 
-	planner_llm = ChatOllama(
+	planner_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=False,
-		base_url=OLLAMA_BASE_URL,
 	)
 	bound_planner = planner_llm.bind_tools([CodeReviewExtraction])
 	planner_prompt = f"""
@@ -716,11 +718,10 @@ def get_code_reviewer_router_context(
 			"last_code_excerpt": "",
 		}
 
-	chat_llm = ChatOllama(
+	chat_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=False,
-		base_url=OLLAMA_BASE_URL,
 	)
 	conversation_memory = get_or_create_code_review_memory(session_id=session_id, llm=chat_llm)
 	memory_summary = load_code_review_summary(conversation_memory=conversation_memory, llm=chat_llm)
@@ -751,11 +752,10 @@ def code_reviewer_tool(
 	static_report = run_static_analysis(user_code)
 	execution_report = execute_code_sandbox(user_code)
 
-	chat_llm = ChatOllama(
+	chat_llm = create_chat_client(
 		model=llm_model,
 		temperature=0.0,
 		verbose=False,
-		base_url=OLLAMA_BASE_URL,
 	)
 	conversation_memory = get_or_create_code_review_memory(session_id=session_id, llm=chat_llm)
 	memory_summary = load_code_review_summary(conversation_memory=conversation_memory, llm=chat_llm)

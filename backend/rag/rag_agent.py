@@ -8,14 +8,18 @@ from typing import Any
 
 from chromadb import PersistentClient
 from chromadb.utils import embedding_functions
+from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
+
+try:
+	from backend.llm_clients import DEFAULT_LLM_MODEL, OLLAMA_BASE_URL
+except ImportError:
+	from llm_clients import DEFAULT_LLM_MODEL, OLLAMA_BASE_URL
 
 
-LLM_MODEL = "llama3.1"
+LLM_MODEL = DEFAULT_LLM_MODEL
 EMBEDDING_MODEL = "nomic-embed-text"
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", os.getenv("OLLAMA_HOST", "http://localhost:11434")).rstrip("/")
 EMBEDDING_URL = os.getenv("OLLAMA_EMBEDDING_URL", f"{OLLAMA_BASE_URL}/api/embeddings")
 
 
@@ -52,7 +56,7 @@ def get_collections(
 	}
 
 
-def build_generation_chain(chat_llm: ChatOllama) -> Any:
+def build_generation_chain(chat_llm: BaseChatModel) -> Any:
 	"""Create the final generation chain."""
 	prompt_template = ChatPromptTemplate.from_template(
 		"""
@@ -136,7 +140,7 @@ def _parse_guard_response(raw_output: str) -> dict[str, str]:
 	return {"status": "stop", "message": default_scope_message}
 
 
-def guard_question(question: str, guard_llm: ChatOllama) -> dict[str, str]:
+def guard_question(question: str, guard_llm: BaseChatModel) -> dict[str, str]:
 	"""Use the model to enforce domain scope and question clarity."""
 	guard_prompt = f"""
 You classify whether a user question is both:

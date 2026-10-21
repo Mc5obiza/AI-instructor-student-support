@@ -78,7 +78,7 @@ flowchart TD
 
 - **Control plane:** LangGraph state machine handles deterministic routing and node transitions.
 - **Retrieval plane:** ChromaDB semantic search + cross-encoder reranking.
-- **Generation plane:** Llama 3.1 (Ollama) constrained by retrieved context and guardrails.
+- **Generation plane:** Ollama or OpenRouter, selected with `LLM_PROVIDER`, constrained by retrieved context and guardrails.
 - **Persistence plane:** MariaDB stores user/session/message continuity and session-level memory summaries.
 
 ## 4. Key Features
@@ -90,14 +90,14 @@ flowchart TD
 - **Persistent Conversational Memory:** Summary-based memory supports follow-up continuity across sessions.
 - **Structured Session Infrastructure:** User auth, session lifecycle, title management, and message history persisted in backend storage.
 - **Real-Time Streaming UX:** SSE token streaming from FastAPI for responsive chat interactions.
-- **Local-First Deployment:** Ollama-hosted models and local vector DB for low-latency, privacy-aware educational use.
+- **Flexible Model Providers:** Use local Ollama by default or configure OpenRouter with an API key.
 - **Code Assistance Path:** Dedicated tooling for explaining, debugging, and iterating over code-centric student prompts.
 
 ## 5. Tech Stack
 
 | Category | Technologies |
 |---|---|
-| **LLMs** | `llama3.1` via Ollama |
+| **LLMs** | `llama3.1` via Ollama (default) or an OpenRouter model via the OpenAI-compatible LangChain client |
 | **Embedding Models** | `nomic-embed-text` via Ollama Embeddings API |
 | **Reranking** | `BAAI/bge-reranker-base` (Sentence Transformers CrossEncoder) |
 | **Orchestration** | LangGraph, LangChain Core |
@@ -115,6 +115,8 @@ This project is designed to showcase production-minded AI engineering: retrieval
 ## Testing
 
 The default test suite uses deterministic in-memory vector collections and mocked model/API boundaries. It does not connect to MariaDB, call Ollama, download models, or read the persisted production vector database.
+
+To use OpenRouter, set `LLM_PROVIDER=openrouter`, `OPENROUTERAPIKEY` to your OpenRouter API key, and optionally `OPENROUTER_MODEL` in the root `.env` file. Ollama remains the default when `LLM_PROVIDER` is unset.
 
 Activate the project environment from the repository root before installing test tools or running Python:
 
