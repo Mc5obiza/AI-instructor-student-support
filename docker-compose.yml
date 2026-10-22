@@ -54,9 +54,11 @@ services:
       COOKIE_SECURE: "false"
       COOKIE_SAMESITE: lax
       FRONTEND_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-${OPENROUTERAPIKEY:-}}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_EMBEDDING_URL: http://ollama:11434/api/embeddings
-      SESSION_TITLE_MODEL: llama3.1
     ports:
       - "8000:8000"
     volumes:

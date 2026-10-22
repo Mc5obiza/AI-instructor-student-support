@@ -102,4 +102,7 @@ def test_retrieval_reranking_and_generation_keep_relevant_source_grounded() -> N
     assert "source=statistics.pdf" in context["context"]
     assert "The mean is the sum of values" in captured_prompt["text"]
     assert "ONLY the provided course context" in captured_prompt["text"]
+    assert "Format mathematical formulas and equations as LaTeX math" in captured_prompt["text"]
+    assert "Put every code example in a fenced Markdown code block" in captured_prompt["text"]
+    assert "Do not put programming code, API calls, or code arguments in math delimiters" in captured_prompt["text"]
     assert answer.endswith("[1]")

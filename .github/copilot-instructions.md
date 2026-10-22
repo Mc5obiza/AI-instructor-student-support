@@ -4,7 +4,7 @@
 This project is an AI-powered learning assistant built with a Retrieval-Augmented Generation (RAG) architecture.
 
 The system allows students to ask questions about course material (PDFs and Jupyter notebooks).  
-The system retrieves relevant document chunks and uses a local LLM to generate answers.
+The system retrieves relevant document chunks and uses OpenRouter by default to generate answers.
 
 Core pipeline:
 
@@ -17,12 +17,12 @@ User Question
 
 Models used:
 
-- LLM: llama3.1 (Ollama)
+- LLM: OpenRouter (default; configurable model)
 - Embeddings: nomic-embed-text (Ollama)
 - Reranker: bge-reranker-base
 - Vector database: FAISS
 
-All models run locally.
+Embeddings and reranking run locally; chat generation uses OpenRouter unless Ollama is explicitly selected.
 
 ---
 
@@ -157,7 +157,7 @@ Follow these rules:
 - write unit tests for critical functions (e.g. retrieval, reranking)
 - for Data processing, use existing libraries (e.g. PyPDF2 for PDFs, nbformat for notebooks)
 - For the model use this one:
-  - the LLM: llama3.1 (Ollama)
+  - the LLM: OpenRouter (default; configure with `OPENROUTER_API_KEY` and optionally `OPENROUTER_MODEL`)
   - the embedding model: nomic-embed-text (Ollama)
   - the reranker: bge-reranker-base
 - the vector database: ChromaDB

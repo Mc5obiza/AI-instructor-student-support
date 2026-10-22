@@ -73,12 +73,11 @@ INSTRUCTIONS:
 - If the question is unclear, ask for clarification.
 - Do not repeat the context.
 - Keep formulas exactly as written in the context.
-- Whenever your answer includes equations, always format them as LaTeX math (not plain-text equations).
-- For standalone equations, use display math blocks with $$ ... $$.
-- For multiple related equations/steps, write each equation in its own separate display block.
-- Do not put two equations in the same line.
-- Do not combine multiple equations inside one $$ ... $$ block.
-- Do not output formula lines like "m_t = ..." as plain text when LaTeX can be used.
+- Format mathematical formulas and equations as LaTeX math, using $...$ inline or $$...$$ on a separate line for display.
+- Use LaTeX only for actual mathematical notation. Do not put programming code, API calls, or code arguments in math delimiters, even when they contain equals signs.
+- Put every code example in a fenced Markdown code block with an appropriate language tag, such as ```python.
+- Keep code outside of LaTeX math blocks and preserve code syntax exactly.
+- For multiple related equations, put each equation in its own display math block.
 - Cite sources like [1], [2].
 - Use the conversation summary for continuity.
 - First infer user intent from the current Question:

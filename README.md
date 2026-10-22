@@ -1,5 +1,5 @@
 # AI LilMose3da
-### Local Agentic RAG Tutor for Data Science: LangGraph-Orchestrated, Retrieval-First, and Fully On-Prem
+### OpenRouter-Powered Agentic RAG Tutor for Data Science: LangGraph-Orchestrated, Retrieval-First, with Local Embeddings and Reranking
 
 ## 1. Project Title & Catchy Subtitle
 
@@ -9,7 +9,7 @@ It combines a retrieval-augmented generation (RAG) pipeline with tool-based orch
 - High-precision course question answering
 - Code explanation and debugging support
 
-All core models run locally through Ollama to reduce dependency on external APIs and improve privacy for classroom usage.
+Chat generation uses OpenRouter; embeddings and reranking run locally to keep retrieval independent of the hosted LLM.
 
 ## 2. Overview & Impact
 
@@ -38,7 +38,7 @@ The platform is built around a LangGraph router node that dispatches each query 
 - **RAG path** for grounded course-content QA
 - **Code reviewer path** for code explanation, debugging, and follow-up code edits
 
-For RAG, the system performs hierarchical retrieval over three Chroma collections (`course`, `part`, `chunk`), gathers top semantic candidates (top-25 design target), adds a lightweight internal BM25 ranking step, fuses semantic and BM25 rankings via RRF, reranks to top-5 with `bge-reranker-base`, compresses context when needed, and then prompts `llama3.1` for final grounded response generation.
+For RAG, the system performs hierarchical retrieval over three Chroma collections (`course`, `part`, `chunk`), gathers top semantic candidates (top-25 design target), adds a lightweight internal BM25 ranking step, fuses semantic and BM25 rankings via RRF, reranks to top-5 with `bge-reranker-base`, compresses context when needed, and then prompts the configured OpenRouter model for final grounded response generation.
 
 FastAPI streams token outputs over SSE, while user accounts, sessions, titles, message history, and memory summaries are persisted through the backend session management layer backed by MariaDB.
 
@@ -52,7 +52,7 @@ flowchart TD
 
     ROUTER -->|code_reviewer| CR[Code Reviewer Toolchain]
     CR --> CRMEM[Load Code-Review Context]
-    CRMEM --> CRLLM[Llama 3.1 via Ollama]
+    CRMEM --> CRLLM[Configured OpenRouter Model]
     CRLLM --> STREAM1[Token Stream Response]
 
     ROUTER -->|rag| GUARD[Scope + Clarity Guard]
@@ -64,7 +64,7 @@ flowchart TD
     C2 --> C3[Chunk Collection Semantic Search\nTop-K Candidate Chunks]
     C3 --> RR[bge-reranker-base\nTop-5 Relevance Selection]
     RR --> CMP[Context Compression / Budgeting]
-    CMP --> GEN[Grounded Answer Generation\nLlama 3.1]
+    CMP --> GEN[Grounded Answer Generation\nOpenRouter]
     GEN --> STREAM2[Token Stream Response]
 
     STREAM1 --> STORE[Persist Session + Messages + Summary]
@@ -78,7 +78,7 @@ flowchart TD
 
 - **Control plane:** LangGraph state machine handles deterministic routing and node transitions.
 - **Retrieval plane:** ChromaDB semantic search + cross-encoder reranking.
-- **Generation plane:** Ollama or OpenRouter, selected with `LLM_PROVIDER`, constrained by retrieved context and guardrails.
+- **Generation plane:** OpenRouter by default (or Ollama when explicitly selected), constrained by retrieved context and guardrails.
 - **Persistence plane:** MariaDB stores user/session/message continuity and session-level memory summaries.
 
 ## 4. Key Features
@@ -90,14 +90,14 @@ flowchart TD
 - **Persistent Conversational Memory:** Summary-based memory supports follow-up continuity across sessions.
 - **Structured Session Infrastructure:** User auth, session lifecycle, title management, and message history persisted in backend storage.
 - **Real-Time Streaming UX:** SSE token streaming from FastAPI for responsive chat interactions.
-- **Flexible Model Providers:** Use local Ollama by default or configure OpenRouter with an API key.
+- **Flexible Model Providers:** Use OpenRouter by default or select local Ollama with `LLM_PROVIDER=ollama`.
 - **Code Assistance Path:** Dedicated tooling for explaining, debugging, and iterating over code-centric student prompts.
 
 ## 5. Tech Stack
 
 | Category | Technologies |
 |---|---|
-| **LLMs** | `llama3.1` via Ollama (default) or an OpenRouter model via the OpenAI-compatible LangChain client |
+| **LLMs** | OpenRouter model (default) via the OpenAI-compatible LangChain client, or local Ollama |
 | **Embedding Models** | `nomic-embed-text` via Ollama Embeddings API |
 | **Reranking** | `BAAI/bge-reranker-base` (Sentence Transformers CrossEncoder) |
 | **Orchestration** | LangGraph, LangChain Core |
@@ -116,7 +116,7 @@ This project is designed to showcase production-minded AI engineering: retrieval
 
 The default test suite uses deterministic in-memory vector collections and mocked model/API boundaries. It does not connect to MariaDB, call Ollama, download models, or read the persisted production vector database.
 
-To use OpenRouter, set `LLM_PROVIDER=openrouter`, `OPENROUTERAPIKEY` to your OpenRouter API key, and optionally `OPENROUTER_MODEL` in the root `.env` file. Ollama remains the default when `LLM_PROVIDER` is unset.
+OpenRouter is the default chat provider. Set `OPENROUTER_API_KEY` to your OpenRouter API key in the root `.env` file, and optionally set `OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`). You can explicitly select local chat generation with `LLM_PROVIDER=ollama`. Ollama is still used for local embeddings in either configuration.
 
 Activate the project environment from the repository root before installing test tools or running Python:
 
@@ -150,7 +150,7 @@ The optional HTML report is written to `htmlcov/`. Real-model and live-database 
 
 ## 6. Docker Deployment
 
-You can run the full stack (frontend + backend + MariaDB + Ollama) with Docker Compose.
+You can run the full stack (frontend + backend + MariaDB + Ollama for embeddings) with Docker Compose. Chat generation requires an OpenRouter API key in `.env`.
 
 ### Configure secrets
 
@@ -168,10 +168,9 @@ The `.env` file is ignored by git, so secrets stay out of source control.
 docker compose up --build -d
 ```
 
-### Pull required Ollama models (first run only)
+### Pull the Ollama embedding model (first run only)
 
 ```bash
-docker compose exec ollama ollama pull llama3.1
 docker compose exec ollama ollama pull nomic-embed-text
 ```
 

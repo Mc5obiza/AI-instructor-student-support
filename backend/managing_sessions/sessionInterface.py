@@ -270,3 +270,22 @@ class SessionInterface:
                 cursor.close()
             if connection:
                 connection.close()
+    def delete_session(self, session_id):
+        connection = None
+        cursor = None
+        try:
+            connection = self.connector.connect()
+            cursor = connection.cursor()
+            query = f"DELETE FROM session WHERE id = {connection.escape(session_id)}"
+            cursor.execute(query)
+            connection.commit()
+            print("Session deleted successfully!")
+            return json.dumps({"status": "200", "message": "Session deleted successfully!"})
+        except Exception as e:
+            print(f"Error deleting session: {e}")
+            return json.dumps({"status": "500", "message": "An error occurred while deleting the session"})
+        finally:
+            if cursor:
+                cursor.close()
+            if connection:
+                connection.close()

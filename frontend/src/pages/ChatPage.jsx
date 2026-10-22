@@ -13,10 +13,12 @@ import {
   Plus,
   SendHorizontal,
   Sparkles,
+  Trash2,
   UserCircle2,
 } from "lucide-react";
 import {
   createNewChatSession,
+  deleteChatSession,
   fetchChatMessages,
   fetchChatSessions,
   streamPrompt,
@@ -31,6 +33,15 @@ function truncateTitle(title) {
   return `${raw.slice(0, 29)}...`;
 }
 
+function isLikelyCodeLine(line) {
+  const trimmed = String(line || "").trim();
+  return (
+    /\b[A-Za-z_]\w*(?:\[[^\]\n]+\])?(?:\.[A-Za-z_]\w*)+\s*\(/.test(trimmed) ||
+    /\b(?:inplace|axis|value|dtype)\s*=\s*(?:True|False|None|\d+|["'])/.test(trimmed) ||
+    /^(?:def|class|return|import|from|for|while|if|else|elif|try|except|print)\b/.test(trimmed)
+  );
+}
+
 function isLikelyEquationLine(line) {
   const trimmed = String(line || "").trim();
   if (!trimmed) {
@@ -38,6 +49,7 @@ function isLikelyEquationLine(line) {
   }
 
   if (
+    isLikelyCodeLine(trimmed) ||
     trimmed.includes("$$") ||
     trimmed.includes("\\begin{") ||
     trimmed.includes("\\end{") ||
@@ -82,28 +94,114 @@ function normalizeMathMarkdown(content) {
   const text = String(content || "");
   const lines = text.split(/\r?\n/);
   const normalized = [];
+  let insideCodeFence = false;
+  let insideGeneratedCode = false;
+  let insideDisplayMath = false;
+
+  const appendPlainLine = (line) => {
+    if (isLikelyCodeLine(line)) {
+      if (!insideGeneratedCode) {
+        normalized.push("```python");
+        insideGeneratedCode = true;
+      }
+      normalized.push(line);
+      return;
+    }
+
+    const expandedLines = splitPackedEquations(line);
+    for (const expanded of expandedLines) {
+      if (isLikelyEquationLine(expanded)) {
+        normalized.push(toDisplayMathBlock(expanded));
+        normalized.push("");
+      } else {
+        if (insideGeneratedCode && expanded.trim()) {
+          normalized.push("```");
+          insideGeneratedCode = false;
+        }
+        normalized.push(expanded);
+      }
+    }
+  };
 
   for (const line of lines) {
-    const expandedLines = splitPackedEquations(line);
-    if (expandedLines.length > 1) {
-      for (const expanded of expandedLines) {
-        if (isLikelyEquationLine(expanded)) {
-          normalized.push(toDisplayMathBlock(expanded));
-          normalized.push("");
-        } else {
-          normalized.push(expanded);
-        }
+    if (
+      insideGeneratedCode &&
+      line.trim() &&
+      !isLikelyCodeLine(line) &&
+      !/^\s*(`{3,}|~{3,})/.test(line)
+    ) {
+      normalized.push("```");
+      insideGeneratedCode = false;
+    }
+
+    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+      insideCodeFence = !insideCodeFence;
+      normalized.push(line);
+      continue;
+    }
+
+    if (insideCodeFence) {
+      normalized.push(line);
+      continue;
+    }
+
+    if (insideDisplayMath) {
+      const closingIndex = line.indexOf("$$");
+      if (closingIndex === -1) {
+        normalized.push(line);
+        continue;
+      }
+
+      const mathContent = line.slice(0, closingIndex).trimEnd();
+      if (mathContent) {
+        normalized.push(mathContent);
+      }
+      normalized.push("$$");
+      insideDisplayMath = false;
+      const trailingText = line.slice(closingIndex + 2).trim();
+      if (trailingText) {
+        appendPlainLine(trailingText);
       }
       continue;
     }
 
-    const [single] = expandedLines;
-    if (isLikelyEquationLine(single)) {
-      normalized.push(toDisplayMathBlock(single));
-      normalized.push("");
-    } else {
-      normalized.push(single);
+    const displayMathPattern = /\$\$([\s\S]*?)\$\$/g;
+    let previousIndex = 0;
+    let match = displayMathPattern.exec(line);
+    if (match) {
+      while (match) {
+        const leadingText = line.slice(previousIndex, match.index).trim();
+        if (leadingText) {
+          appendPlainLine(leadingText);
+        }
+        normalized.push(toDisplayMathBlock(match[1]));
+        previousIndex = match.index + match[0].length;
+        match = displayMathPattern.exec(line);
+      }
+
+      const trailingText = line.slice(previousIndex).trim();
+      if (trailingText) {
+        appendPlainLine(trailingText);
+      }
+      continue;
     }
+
+    const openingIndex = line.indexOf("$$");
+    if (openingIndex !== -1 && line.slice(0, openingIndex).trim() === "") {
+      normalized.push("$$");
+      const mathContent = line.slice(openingIndex + 2).trim();
+      if (mathContent) {
+        normalized.push(mathContent);
+      }
+      insideDisplayMath = true;
+      continue;
+    }
+
+    appendPlainLine(line);
+  }
+
+  if (insideGeneratedCode) {
+    normalized.push("```");
   }
 
   while (normalized.length > 0 && normalized[normalized.length - 1] === "") {
@@ -123,12 +221,16 @@ export default function ChatPage() {
   const [prompt, setPrompt] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingDeleteSession, setPendingDeleteSession] = useState(null);
+  const [deletingSessionId, setDeletingSessionId] = useState(null);
+  const [deleteError, setDeleteError] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
 
   const sessionsRef = useRef({});
   const streamingSessionRef = useRef(null);
   const messagesBoxRef = useRef(null);
+  const deleteDialogRef = useRef(null);
   const chatSessions = chatSessionsState;
 
   const setChatSessions = useCallback((updaterOrValue) => {
@@ -317,6 +419,48 @@ export default function ChatPage() {
     // Switch to a draft chat. The backend session is created only when the user sends a message.
     setActiveSessionId(null);
     setInfoMessage("New chat ready. Session will be created when you send a message.");
+  };
+
+  const requestDeleteSession = (sessionId, title) => {
+    if (streamingSessionRef.current === sessionId) {
+      return;
+    }
+
+    setErrorMessage("");
+    setInfoMessage("");
+    setDeleteError("");
+    setPendingDeleteSession({ sessionId, title });
+  };
+
+  const handleDeleteSession = async () => {
+    if (!pendingDeleteSession) {
+      return;
+    }
+
+    const { sessionId } = pendingDeleteSession;
+    setDeletingSessionId(sessionId);
+
+    const result = await deleteChatSession(backendUrl, sessionId);
+
+    if (!result.ok) {
+      setDeletingSessionId(null);
+      setDeleteError(result.error || "Could not delete session");
+      return;
+    }
+
+    setDeletingSessionId(null);
+    setPendingDeleteSession(null);
+    const remainingOrder = chatOrder.filter((item) => item !== sessionId);
+    setChatSessions((previous) => {
+      const next = { ...previous };
+      delete next[sessionId];
+      return next;
+    });
+    setChatOrder(remainingOrder);
+    setActiveSessionId((activeId) =>
+      activeId === sessionId ? remainingOrder[0] || null : activeId,
+    );
+    setInfoMessage(result.message || "Session deleted");
   };
 
   const currentMessages = useMemo(() => {
@@ -519,34 +663,56 @@ export default function ChatPage() {
 
   return (
     <section className="chat-layout">
-      <aside className="chat-sidebar">
-        <h2>
-          <MessageSquareText size={16} />
-          Chats
-        </h2>
+      <aside className="chat-sidebar" aria-label="Chat history">
+        <div className="sidebar-heading">
+          <div>
+            <p className="sidebar-eyebrow">YOUR WORKSPACE</p>
+            <h2>
+              <MessageSquareText size={17} />
+              Chats
+            </h2>
+          </div>
+          {chatOrder.length > 0 ? (
+            <span className="chat-count">{chatOrder.length}</span>
+          ) : null}
+        </div>
 
         <button type="button" className="primary-button" onClick={handleNewChat}>
           <Plus size={15} />
           New Chat
         </button>
 
-        {chatOrder.length === 0 ? <p className="muted-text">No chats yet.</p> : null}
+        {chatOrder.length === 0 ? (
+          <p className="sidebar-empty">Your conversations will show up here.</p>
+        ) : null}
 
-        <div className="chat-list">
+        <div className="chat-list" aria-label="Previous conversations">
           {chatOrder.map((sessionId) => {
             const item = chatSessions[sessionId] || {};
             const title = truncateTitle(item.title || "Untitled Chat");
             const active = sessionId === activeSessionId;
 
             return (
-              <button
-                key={sessionId}
-                type="button"
-                className={`chat-item ${active ? "active" : ""}`}
-                onClick={() => setActiveSessionId(sessionId)}
-              >
-                {title}
-              </button>
+              <div className={`chat-item-row ${active ? "active" : ""}`} key={sessionId}>
+                <button
+                  type="button"
+                  className="chat-item"
+                  onClick={() => setActiveSessionId(sessionId)}
+                  aria-pressed={active}
+                >
+                  {title}
+                </button>
+                <button
+                  type="button"
+                  className="delete-chat-button"
+                  onClick={() => requestDeleteSession(sessionId, item.title || "Untitled Chat")}
+                  disabled={deletingSessionId === sessionId || streamingSessionRef.current === sessionId}
+                  aria-label={`Delete ${item.title || "Untitled Chat"}`}
+                  title="Delete conversation"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             );
           })}
         </div>
@@ -568,39 +734,69 @@ export default function ChatPage() {
         {infoMessage ? <p className="info-text">{infoMessage}</p> : null}
         {isSyncing ? <p className="muted-text">Syncing chats...</p> : null}
 
-        <div className="messages-box" ref={messagesBoxRef}>
-          <AnimatePresence initial={false}>
-            {currentMessages.map((message, index) => (
-              <motion.div
-                layout
-                key={`${message.role}-${index}`}
-                className={`message-row ${message.role}`}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.18 }}
-              >
-                <div className="message-bubble">
-                  <strong>
-                    {message.role === "user" ? <UserCircle2 size={14} /> : <Bot size={14} />}
-                    {message.role === "user" ? "You" : "Assistant"}
-                  </strong>
-                  <div className="message-markdown">
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                      {normalizeMathMarkdown(String(message.content || ""))}
-                    </ReactMarkdown>
+        <div className="messages-box" ref={messagesBoxRef} aria-live="polite">
+          {currentMessages.length === 0 ? (
+            <div className="chat-empty-state">
+              <div className="empty-state-icon" aria-hidden="true">
+                <Sparkles size={22} />
+              </div>
+              <p className="empty-state-eyebrow">YOUR STUDY COMPANION</p>
+              <h2>What are you learning today?</h2>
+              <p className="empty-state-copy">
+                Ask a question about your course material and get a clear, grounded explanation.
+              </p>
+              <div className="suggested-prompts" aria-label="Suggested questions">
+                {[
+                  "When should I use a decision tree?",
+                  "Explain gradient descent simply",
+                  "How do I handle missing data?",
+                ].map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    className="suggestion-button"
+                    onClick={() => setPrompt(suggestion)}
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <AnimatePresence initial={false}>
+              {currentMessages.map((message, index) => (
+                <motion.div
+                  layout
+                  key={`${message.role}-${index}`}
+                  className={`message-row ${message.role}`}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.18 }}
+                >
+                  <div className="message-bubble">
+                    <strong>
+                      {message.role === "user" ? <UserCircle2 size={14} /> : <Bot size={14} />}
+                      {message.role === "user" ? "You" : "Assistant"}
+                    </strong>
+                    <div className="message-markdown">
+                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {normalizeMathMarkdown(String(message.content || ""))}
+                      </ReactMarkdown>
+                    </div>
                   </div>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          )}
         </div>
 
         <form className="prompt-form" onSubmit={handleSendPrompt}>
           <input
             type="text"
+            aria-label="Ask a question about your course material"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Type your question..."
+            placeholder="Ask anything about your course material..."
             disabled={isStreaming}
           />
           <button type="submit" disabled={isStreaming}>
@@ -609,6 +805,79 @@ export default function ChatPage() {
           </button>
         </form>
       </div>
+      {pendingDeleteSession ? (
+        <div
+          className="confirmation-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deletingSessionId) {
+              setPendingDeleteSession(null);
+              setDeleteError("");
+            }
+          }}
+        >
+          <section
+            className="confirmation-dialog"
+            ref={deleteDialogRef}
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-dialog-title"
+            aria-describedby="delete-dialog-description"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !deletingSessionId) {
+                setPendingDeleteSession(null);
+                setDeleteError("");
+              } else if (event.key === "Tab") {
+                const buttons = deleteDialogRef.current?.querySelectorAll("button:not(:disabled)");
+                if (!buttons?.length) {
+                  return;
+                }
+
+                const firstButton = buttons[0];
+                const lastButton = buttons[buttons.length - 1];
+                if (event.shiftKey && document.activeElement === firstButton) {
+                  event.preventDefault();
+                  lastButton.focus();
+                } else if (!event.shiftKey && document.activeElement === lastButton) {
+                  event.preventDefault();
+                  firstButton.focus();
+                }
+              }
+            }}
+          >
+            <div className="confirmation-icon" aria-hidden="true">
+              <Trash2 size={20} />
+            </div>
+            <h2 id="delete-dialog-title">Delete this conversation?</h2>
+            <p id="delete-dialog-description">
+              <strong>{pendingDeleteSession.title}</strong> and its messages will be permanently deleted.
+            </p>
+            {deleteError ? <p className="confirmation-error" role="alert">{deleteError}</p> : null}
+            <div className="confirmation-actions">
+              <button
+                type="button"
+                className="confirmation-cancel"
+                onClick={() => {
+                  setPendingDeleteSession(null);
+                  setDeleteError("");
+                }}
+                disabled={Boolean(deletingSessionId)}
+                autoFocus
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="confirmation-delete"
+                onClick={handleDeleteSession}
+                disabled={Boolean(deletingSessionId)}
+              >
+                <Trash2 size={15} />
+                {deletingSessionId ? "Deleting..." : "Delete conversation"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

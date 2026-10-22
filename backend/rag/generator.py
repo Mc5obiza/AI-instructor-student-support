@@ -4,12 +4,14 @@ from pathlib import Path
 from typing import AsyncIterator
 
 try:
+	from backend.llm_clients import DEFAULT_LLM_MODEL
 	from backend.rag.orchestrator import stream_orchestrated_response
 except ImportError:
+	from llm_clients import DEFAULT_LLM_MODEL
 	from rag.orchestrator import stream_orchestrated_response
 
 
-LLM_MODEL = "llama3.1"
+LLM_MODEL = DEFAULT_LLM_MODEL
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 
 

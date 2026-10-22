@@ -14,6 +14,8 @@ try:
 		CHAT_SESSION_COOKIE_NAME,
 		FRONTEND_ORIGINS,
 		CurrentUser,
+		_clear_chat_session_cookie,
+		_delete_session_or_raise,
 		_clear_logout_cookies,
 		_create_access_token,
 		_create_session_or_raise,
@@ -34,6 +36,8 @@ except ImportError:
 		CHAT_SESSION_COOKIE_NAME,
 		FRONTEND_ORIGINS,
 		CurrentUser,
+		_clear_chat_session_cookie,
+		_delete_session_or_raise,
 		_clear_logout_cookies,
 		_create_access_token,
 		_create_session_or_raise,
@@ -141,6 +145,23 @@ def create_app() -> FastAPI:
 	) -> dict[str, Any]:
 		sessions = _get_sessions_or_raise(user_id=current_user.user_id)
 		return {"sessions": sessions}
+
+	@app.delete("/chat/session/{session_id}")
+	async def delete_chat_session(
+		session_id: str,
+		request: Request,
+		response: Response,
+		current_user: CurrentUser = Depends(get_current_user),
+	) -> dict[str, str]:
+		sessions = _get_sessions_or_raise(user_id=current_user.user_id)
+		allowed_session_ids = {str(item.get("session_id", "")).strip() for item in sessions}
+		if session_id not in allowed_session_ids:
+			raise HTTPException(status_code=404, detail="Session not found")
+
+		_delete_session_or_raise(session_id=session_id)
+		if request.cookies.get(CHAT_SESSION_COOKIE_NAME) == session_id:
+			_clear_chat_session_cookie(response)
+		return {"message": "Session deleted", "session_id": session_id}
 
 	@app.get("/chat/session/{session_id}/messages")
 	async def get_chat_session_messages(
@@ -270,5 +291,4 @@ def main() -> None:
 
 if __name__ == "__main__":
 	main()
-
 

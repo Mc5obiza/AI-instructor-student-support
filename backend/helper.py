@@ -329,6 +329,15 @@ def _get_sessions_or_raise(user_id: str) -> list[dict[str, Any]]:
 	return clean_sessions
 
 
+def _delete_session_or_raise(session_id: str) -> None:
+	result = json.loads(SessionInterface().delete_session(session_id=session_id))
+	if str(result.get("status", "")) != "200":
+		raise HTTPException(
+			status_code=500,
+			detail=str(result.get("message", "Failed to delete session")),
+		)
+
+
 def _get_messages_or_raise(session_id: str) -> list[dict[str, Any]]:
 	result = json.loads(SessionInterface().get_messages(session_id=session_id))
 	if str(result.get("status", "")) != "200":

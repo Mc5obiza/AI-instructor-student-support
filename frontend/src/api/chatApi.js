@@ -19,6 +19,26 @@ export async function fetchChatSessions(baseUrl) {
   }
 }
 
+export async function deleteChatSession(baseUrl, sessionId) {
+  try {
+    const response = await axios.delete(
+      `${apiBase(baseUrl)}/chat/session/${encodeURIComponent(sessionId)}`,
+      {
+        withCredentials: true,
+        validateStatus: () => true,
+      },
+    );
+
+    if (response.status >= 200 && response.status < 300) {
+      return { ok: true, message: String(response.data?.message || "Session deleted") };
+    }
+
+    return { ok: false, error: responseDetail(response) };
+  } catch (error) {
+    return { ok: false, error: String(error?.message || "Could not delete session") };
+  }
+}
+
 export async function fetchChatMessages(baseUrl, sessionId) {
   try {
     const response = await axios.get(`${apiBase(baseUrl)}/chat/session/${sessionId}/messages`, {

@@ -73,6 +73,47 @@ def test_user_cannot_read_another_session(
     assert response.status_code == 404
 
 
+def test_user_cannot_delete_another_users_session(
+    authenticated_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(main, "_get_sessions_or_raise", lambda **_: [{"session_id": "owned-session"}])
+    monkeypatch.setattr(
+        main,
+        "_delete_session_or_raise",
+        lambda **_: pytest.fail("Unowned sessions must not be deleted."),
+    )
+
+    response = authenticated_client.delete("/chat/session/other-session")
+
+    assert response.status_code == 404
+
+
+def test_user_can_delete_owned_session(
+    authenticated_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    deleted_sessions: list[str] = []
+    monkeypatch.setattr(main, "_get_sessions_or_raise", lambda **_: [{"session_id": "owned-session"}])
+    monkeypatch.setattr(
+        main,
+        "_delete_session_or_raise",
+        lambda *, session_id: deleted_sessions.append(session_id),
+    )
+    authenticated_client.cookies.set(main.CHAT_SESSION_COOKIE_NAME, "owned-session")
+
+    response = authenticated_client.delete("/chat/session/owned-session")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "message": "Session deleted",
+        "session_id": "owned-session",
+    }
+    assert deleted_sessions == ["owned-session"]
+    assert f"{main.CHAT_SESSION_COOKIE_NAME}=" in response.headers["set-cookie"]
+    assert "max-age=0" in response.headers["set-cookie"].lower()
+
+
 def test_chat_endpoint_streams_and_persists_response(
     authenticated_client: TestClient,
     monkeypatch: Any,
