@@ -186,3 +186,9 @@ docker compose exec ollama ollama pull nomic-embed-text
 ```bash
 docker compose down
 ```
+
+### Troubleshooting authentication
+
+Registration requires a username of at least 2 characters, a valid email, and a password of at least 8 characters.
+
+If login returns a database access-denied error for `ai_user`, set `DB_PASSWORD` in the root `.env` to the password configured for that database account. With Docker Compose, MariaDB only creates the account from these environment values when its data volume is first initialized; changing `.env` later does not update the stored account password. Update the MariaDB account password to match `.env` or restore the original value, then restart the backend. Do not remove the database volume unless you intend to erase its data.

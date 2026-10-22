@@ -147,6 +147,7 @@ export default function AuthPage() {
               type="text"
               value={signupUsername}
               onChange={(event) => setSignupUsername(event.target.value)}
+              minLength={2}
               required
             />
 
@@ -165,6 +166,7 @@ export default function AuthPage() {
               type="password"
               value={signupPassword}
               onChange={(event) => setSignupPassword(event.target.value)}
+              minLength={8}
               required
             />
 

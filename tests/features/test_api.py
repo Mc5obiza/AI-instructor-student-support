@@ -33,6 +33,30 @@ def test_registration_validates_email_before_database_access(api_client: TestCli
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    ("username", "password"),
+    [("s", "valid-pass"), ("student", "short")],
+)
+def test_registration_rejects_short_credentials_before_database_access(
+    api_client: TestClient,
+    monkeypatch: Any,
+    username: str,
+    password: str,
+) -> None:
+    monkeypatch.setattr(
+        main,
+        "_register_user_or_raise",
+        lambda **_: pytest.fail("Invalid registration data must not access the database."),
+    )
+
+    response = api_client.post(
+        "/auth/register",
+        json={"username": username, "email": "student@example.test", "password": password},
+    )
+
+    assert response.status_code == 422
+
+
 def test_user_cannot_read_another_session(
     authenticated_client: TestClient,
     monkeypatch: Any,

@@ -23,6 +23,17 @@ export function responseDetail(response) {
     if (typeof payload.detail === "string" && payload.detail.trim()) {
       return payload.detail;
     }
+    if (Array.isArray(payload.detail)) {
+      const validationMessages = payload.detail
+        .filter((item) => item && typeof item.msg === "string")
+        .map((item) => {
+          const location = Array.isArray(item.loc) ? item.loc.at(-1) : null;
+          return location ? `${location}: ${item.msg}` : item.msg;
+        });
+      if (validationMessages.length > 0) {
+        return validationMessages.join("; ");
+      }
+    }
     if (typeof payload.message === "string" && payload.message.trim()) {
       return payload.message;
     }
