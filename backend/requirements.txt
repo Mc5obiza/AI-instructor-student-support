@@ -22,5 +22,5 @@ python-multipart
 python-dotenv
 radon
 sentence-transformers
-torch==2.5.1+cpu
+torch==2.6.0+cpu
 uvicorn[standard]
