@@ -45,7 +45,11 @@ backend/rag/telemetry_probe_db
 backend/rag/course_parts.json
 backend/vectordb
 /.conda
-config
+/config/
+!/config/
+/config/*
+!/config/__init__.py
+!/config/DB_CONFIG.py
 
 # Frontend artifacts
 frontend/node_modules/
