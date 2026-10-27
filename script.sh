@@ -3,5 +3,5 @@ set -euo pipefail
 
 echo "Running tests..."
 
-cd backend/test
-python3 -m pytest -v
+cd "$(dirname "$0")"
+python -m pytest -v

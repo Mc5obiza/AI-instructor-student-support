@@ -115,6 +115,7 @@ This project is designed to showcase production-minded AI engineering: retrieval
 ## Testing
 
 The default test suite uses deterministic in-memory vector collections and mocked model/API boundaries. It does not connect to MariaDB, call Ollama, download models, or read the persisted production vector database.
+GitHub Actions runs this suite on Windows for pushes and pull requests targeting `main`; no live database is required.
 
 OpenRouter is the default chat provider. Set `OPENROUTER_API_KEY` to your OpenRouter API key in the root `.env` file, and optionally set `OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`). You can explicitly select local chat generation with `LLM_PROVIDER=ollama`. Ollama is still used for local embeddings in either configuration.
 
