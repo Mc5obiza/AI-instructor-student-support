@@ -29,4 +29,4 @@ jobs:
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: bash my_scripts/script.sh
+        run: bash script.sh
