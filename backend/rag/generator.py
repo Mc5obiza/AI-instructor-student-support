@@ -13,7 +13,7 @@ except ImportError:
 
 LLM_MODEL = DEFAULT_LLM_MODEL
 RERANKER_MODEL = "BAAI/bge-reranker-base"
-
+	
 
 async def generate_stream(
 	question: str,
