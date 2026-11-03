@@ -87,9 +87,16 @@ def build_chunker(
 	)
 
 
-def build_documents(raw_data_dir: Path) -> tuple[list[Document], list[Document], list[Document]]:
+def build_documents(
+	raw_data_dir: Path,
+	chunk_size_tokens: int = CHUNK_SIZE_TOKENS,
+	chunk_overlap_tokens: int = CHUNK_OVERLAP_TOKENS,
+) -> tuple[list[Document], list[Document], list[Document]]:
 	"""Create documents for course, part, and chunk collections."""
-	chunker = build_chunker()
+	chunker = build_chunker(
+		chunk_size_tokens=chunk_size_tokens,
+		chunk_overlap_tokens=chunk_overlap_tokens,
+	)
 
 	course_docs: list[Document] = []
 	part_docs: list[Document] = []

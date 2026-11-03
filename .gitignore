@@ -41,6 +41,13 @@ node_modules/
 # Logs
 *.log
 /data
+!/data/
+/data/*
+!/data/processed/
+/data/processed/*
+!/data/processed/retrieval_golden_dataset.json
+/mlruns/
+/mlartifacts/
 backend/rag/telemetry_probe_db
 backend/rag/course_parts.json
 backend/vectordb

@@ -1,0 +1,357 @@
+{
+  "name": "retrieval-golden-v1",
+  "purpose": "Evaluate retrieval relevance while tuning chunking and vector-search settings.",
+  "source": {
+    "database": "backend/vectordb/chroma_db",
+    "collection": "prototype_chunks",
+    "snapshot_document_count": 712,
+    "metadata_fields": [
+      "course",
+      "section",
+      "source_file",
+      "chunk_id"
+    ]
+  },
+  "labeling": {
+    "unit": "source_section",
+    "relevant_source_fields": [
+      "course",
+      "section",
+      "source_file"
+    ],
+    "matching_rule": "A retrieved chunk is relevant when course and source_file match and its section matches after whitespace is removed and case is folded. This handles OCR whitespace artifacts while labels omit chunk_id and remain stable when the corpus is re-chunked.",
+    "scope": "Retrieval relevance only; this dataset does not evaluate generated answer quality."
+  },
+  "cases": [
+    {
+      "id": "classification-f1-balance",
+      "query": "How does the F1 score balance precision and recall, and what range can it take?",
+      "relevant_sources": [
+        {
+          "course": "classification metrics",
+          "section": "4. f1 score",
+          "source_file": "Classification metrics.pdf"
+        }
+      ]
+    },
+    {
+      "id": "classification-accuracy-imbalance",
+      "query": "Why can accuracy give a misleading impression when the classes are imbalanced?",
+      "relevant_sources": [
+        {
+          "course": "classification metrics",
+          "section": "1. accuracy",
+          "source_file": "Classification metrics.pdf"
+        }
+      ]
+    },
+    {
+      "id": "classification-confusion-matrix",
+      "query": "What dimensions does a confusion matrix have for a binary classification problem?",
+      "relevant_sources": [
+        {
+          "course": "classification metrics",
+          "section": "6. confusion matrix",
+          "source_file": "Classification metrics.pdf"
+        }
+      ]
+    },
+    {
+      "id": "clustering-silhouette-score",
+      "query": "What does a silhouette score say about a point's cluster assignment, and how should values near positive or negative one be interpreted?",
+      "relevant_sources": [
+        {
+          "course": "clustering metrics",
+          "section": "1. silhouette score",
+          "source_file": "Clustering metrics.pdf"
+        }
+      ]
+    },
+    {
+      "id": "relational-model-example",
+      "query": "In the student and identification-card example, which entities are connected and by what relationship?",
+      "relevant_sources": [
+        {
+          "course": "conceptual relational model",
+          "section": "5.example explanation:  in the given diagram:",
+          "source_file": "Conceptual - relational model.pdf"
+        }
+      ]
+    },
+    {
+      "id": "data-cleaning-quality",
+      "query": "What should be checked when assessing data quality during data cleaning?",
+      "relevant_sources": [
+        {
+          "course": "data cleaning",
+          "section": "6.steps in data cleaning",
+          "source_file": "Data cleaning.pdf"
+        }
+      ]
+    },
+    {
+      "id": "matplotlib-capabilities",
+      "query": "What makes Matplotlib useful for scientific and data-analysis visualizations?",
+      "relevant_sources": [
+        {
+          "course": "data visualization using python",
+          "section": "1. introduction to matplotlib and seaborn",
+          "source_file": "Data visualization using python.pdf"
+        }
+      ]
+    },
+    {
+      "id": "python-set-add",
+      "query": "What happens when you add an element to a Python set if that element is already present?",
+      "relevant_sources": [
+        {
+          "course": "datastructure in python",
+          "section": "5. built-in functions with set",
+          "source_file": "Datastructure in python.pdf"
+        }
+      ]
+    },
+    {
+      "id": "decision-tree-splitting",
+      "query": "Which criteria can a decision tree use to choose a split, and what does Gini impurity measure?",
+      "relevant_sources": [
+        {
+          "course": "decision tree",
+          "section": "3.splitting criteria in decision trees",
+          "source_file": "Decision Tree.pdf"
+        }
+      ]
+    },
+    {
+      "id": "pandas-describe",
+      "query": "Which numerical summary statistics are produced by pandas data.describe()?",
+      "relevant_sources": [
+        {
+          "course": "eda using pandas",
+          "section": "3. describe function",
+          "source_file": "EDA using pandas.pdf"
+        }
+      ]
+    },
+    {
+      "id": "feature-normalization",
+      "query": "What does normalization do to the length of a data point, and how is that achieved?",
+      "relevant_sources": [
+        {
+          "course": "feature scaling",
+          "section": "3. normalization",
+          "source_file": "Feature Scaling.pdf"
+        }
+      ]
+    },
+    {
+      "id": "file-reading-versus-parsing",
+      "query": "In Python file handling, how is reading a file different from parsing it?",
+      "relevant_sources": [
+        {
+          "course": "file handling",
+          "section": "2. reading vs parsing",
+          "source_file": "File Handling.pdf"
+        }
+      ]
+    },
+    {
+      "id": "neural-network-backpropagation",
+      "query": "How does backpropagation use the loss calculated after a neural network's forward pass?",
+      "relevant_sources": [
+        {
+          "course": "forward and backward propagation",
+          "section": "2. backpropagation",
+          "source_file": "Forward and Backward propagation.pdf"
+        }
+      ]
+    },
+    {
+      "id": "python-function-parameters",
+      "query": "How are multiple parameters written in a Python function definition?",
+      "relevant_sources": [
+        {
+          "course": "function in python",
+          "section": "1. functions with multiple parameters",
+          "source_file": "function in python.pdf"
+        }
+      ]
+    },
+    {
+      "id": "api-data-collection",
+      "query": "What steps are covered in the API tutorial for collecting movie data with Python?",
+      "relevant_sources": [
+        {
+          "course": "gathering data using api",
+          "section": "1. overview",
+          "source_file": "Gathering Data using API.pdf"
+        }
+      ]
+    },
+    {
+      "id": "git-push-remote",
+      "query": "After creating a GitHub repository, how do you connect the local repository to the remote before pushing?",
+      "relevant_sources": [
+        {
+          "course": "git",
+          "section": "2. pushing code to github",
+          "source_file": "Git.pdf"
+        }
+      ]
+    },
+    {
+      "id": "adam-optimizer",
+      "query": "How does Adam combine momentum and RMSProp when adapting parameter learning rates?",
+      "relevant_sources": [
+        {
+          "course": "gradient descent algorithms",
+          "section": "10.adam",
+          "source_file": "Gradient Descent algorithms.pdf"
+        }
+      ]
+    },
+    {
+      "id": "data-science-modeling",
+      "query": "How do modeling and inference help data scientists predict outcomes and understand causality?",
+      "relevant_sources": [
+        {
+          "course": "introduction to datascience",
+          "section": "2.3. modeling/inference: predicting and explaining",
+          "source_file": "Introduction to datascience.pdf"
+        }
+      ]
+    },
+    {
+      "id": "first-quartile",
+      "query": "What percentage of observations are at or below the first quartile?",
+      "relevant_sources": [
+        {
+          "course": "introduction to statistics",
+          "section": "4.1.2 the first quartile and the third quartile:",
+          "source_file": "Introduction to Statistics.pdf"
+        }
+      ]
+    },
+    {
+      "id": "knn-predictions",
+      "query": "How does K-nearest neighbors make predictions for classification compared with regression?",
+      "relevant_sources": [
+        {
+          "course": "knn",
+          "section": "1.what is knn",
+          "source_file": "KNN.pdf"
+        }
+      ]
+    },
+    {
+      "id": "linear-regression-best-fit",
+      "query": "What is the best-fit line in linear regression designed to minimize?",
+      "relevant_sources": [
+        {
+          "course": "linear regression",
+          "section": "3.best fit line in linear regression",
+          "source_file": "Linear Regression.pdf"
+        }
+      ]
+    },
+    {
+      "id": "classification-loss",
+      "query": "What do classification loss functions evaluate, and what is one example?",
+      "relevant_sources": [
+        {
+          "course": "loss functions",
+          "section": "3.classifi ction loss",
+          "source_file": "Loss functions.pdf"
+        }
+      ]
+    },
+    {
+      "id": "numpy-random-value",
+      "query": "Which NumPy function generates a random floating-point value between zero and one?",
+      "relevant_sources": [
+        {
+          "course": "numpy",
+          "section": "6.numpy random",
+          "source_file": "Numpy.pdf"
+        }
+      ]
+    },
+    {
+      "id": "oop-encapsulation",
+      "query": "What does encapsulation mean in object-oriented Python, and how can access to class variables be controlled?",
+      "relevant_sources": [
+        {
+          "course": "oop in python",
+          "section": "1.encapsulation",
+          "source_file": "OOP in python.pdf"
+        }
+      ]
+    },
+    {
+      "id": "pandas-iloc",
+      "query": "How does pandas iloc select columns using integer positions?",
+      "relevant_sources": [
+        {
+          "course": "pandans intro (how to select and use loc and iloc)",
+          "section": "2.2 using iloc",
+          "source_file": "Pandans intro (how to select and use loc and iloc).pdf"
+        }
+      ]
+    },
+    {
+      "id": "python-statements",
+      "query": "What is a statement in Python, and which examples are mentioned?",
+      "relevant_sources": [
+        {
+          "course": "python intro",
+          "section": "1. statements overview",
+          "source_file": "Python intro.pdf"
+        }
+      ]
+    },
+    {
+      "id": "regex-text-cleaning",
+      "query": "What are regular expressions used for when cleaning messy string columns?",
+      "relevant_sources": [
+        {
+          "course": "regex and data cleaning",
+          "section": "5. **convert** messy string columns into usable numeric values",
+          "source_file": "Regex_and_Data_Cleaning.ipynb"
+        }
+      ]
+    },
+    {
+      "id": "regression-r-squared",
+      "query": "What does an R-squared score measure about a regression model?",
+      "relevant_sources": [
+        {
+          "course": "regression metrics",
+          "section": "5. r² (r-squared)",
+          "source_file": "Regression metrics.pdf"
+        }
+      ]
+    },
+    {
+      "id": "cross-validation-purpose",
+      "query": "How does cross-validation estimate a model's performance on unseen data?",
+      "relevant_sources": [
+        {
+          "course": "train test split and cross validation",
+          "section": "6. cross-validation",
+          "source_file": "Train test split and cross validation.pdf"
+        }
+      ]
+    },
+    {
+      "id": "web-scraping-initial-request",
+      "query": "What does the requests library do at the start of a Python web-scraping workflow?",
+      "relevant_sources": [
+        {
+          "course": "web scraping",
+          "section": "1. initiating web scraping with python",
+          "source_file": "Web Scraping.pdf"
+        }
+      ]
+    }
+  ]
+}

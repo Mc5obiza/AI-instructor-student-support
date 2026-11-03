@@ -149,6 +149,28 @@ pytest --cov=backend.rag.retriever --cov=backend.rag.pdf_processor --cov=backend
 
 The optional HTML report is written to `htmlcov/`. Real-model and live-database tests are intentionally not part of the default suite; add explicit infrastructure configuration before running those checks.
 
+## Retrieval experiments
+
+The golden retrieval set at `data/processed/retrieval_golden_dataset.json` labels relevant sources by `course`, `section`, and `source_file`, so evaluation labels remain valid when the corpus is re-chunked. Section comparison ignores whitespace and case to tolerate OCR inconsistencies. The runner compares chunk size/overlap, top-k, and Chroma HNSW distance/index settings, then logs hit rate, source recall, MRR, dense/rerank/total query latency, index build time, and embedding time to MLflow. Chunk lengths follow the existing whitespace-based token-like counter. The default methods are `dense` (vector only), `hybrid` (vector + BM25 with RRF), and `hybrid_rerank` (the same hybrid candidate set reranked using the project’s `BAAI/bge-reranker-base` CrossEncoder). Each child run also logs per-query gold labels and retrieved sources as `evaluation/retrieval_results.json`.
+
+Run the default sweep from the repository root in `agents_env` with Ollama serving `nomic-embed-text`:
+
+```powershell
+conda run -n agents_env --no-capture-output python -m scripts.run_retrieval_experiments
+```
+
+By default, the sweep uses chunk sizes `300,500,700`, overlaps `50,100`, top-k values `5,10,20`, a candidate pool of 20, cosine/L2/inner-product spaces, and HNSW search ef values `50,100`. The reranker is loaded from the local Hugging Face cache (`local_files_only=True`); no model is downloaded by the runner. To smoke-test a small selection, pass explicit values and `--limit-queries 2`. The runner creates temporary in-memory indexes and does not change `backend/vectordb/chroma_db`. MLflow writes the experiment and runs to the repository-root SQLite database `mlflow.db`.
+
+**Important:** this repository may contain an older `mlruns/` directory. MLflow can select that file store when the UI starts without an explicit backend URI, which makes the SQLite experiment appear empty. From the repository root, always point the UI at the same SQLite database used by the runner:
+
+```powershell
+mlflow ui --backend-store-uri sqlite:///./mlflow.db
+```
+
+In the UI, select the `rag-retrieval-tuning` experiment. The sweep has one parent run and one child run per configuration; select a child run to inspect its chunk/index/top-k parameters and retrieval/latency metrics. The golden dataset is logged as a parent-run artifact under `evaluation/`.
+
+See the [retrieval experiment report](./reports/retrieval-experiment-report.md) for the recorded tuning and reranker-ablation findings, including per-query ranking changes and evaluation caveats.
+
 ## 6. Docker Deployment
 
 You can run the full stack (frontend + backend + MariaDB + Ollama for embeddings) with Docker Compose. Chat generation requires an OpenRouter API key in `.env`.

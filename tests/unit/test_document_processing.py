@@ -101,6 +101,37 @@ def test_build_documents_indexes_notebook_chunks_and_source_metadata(tmp_path: P
     }
 
 
+def test_build_documents_accepts_experiment_chunk_size_and_overlap(tmp_path: Path) -> None:
+    notebook_path = tmp_path / "Statistics_Intro.ipynb"
+    notebook_path.write_text(
+        json.dumps(
+            {
+                "cells": [
+                    {
+                        "cell_type": "markdown",
+                        "id": "content",
+                        "metadata": {},
+                        "source": ["1. Statistics\n" + " ".join(f"word{index}" for index in range(20))],
+                    }
+                ],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _, _, chunks = pdf_processor.build_documents(
+        tmp_path,
+        chunk_size_tokens=6,
+        chunk_overlap_tokens=2,
+    )
+
+    assert len(chunks) > 1
+    assert all(len(chunk.page_content.split()) <= 6 for chunk in chunks)
+
+
 def test_build_documents_extracts_pdf_and_keeps_page_text_connected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
