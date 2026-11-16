@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
+from starlette.concurrency import run_in_threadpool
 
 try:
 	from backend.helper import (
@@ -58,10 +61,16 @@ try:
 	from backend.rag.memory import save_memory_turn
 	from backend.rag.orchestrator import compile_prompt_with_orchestrator
 	from backend.rag.rag_agent import build_generation_chain
+	from backend.rag.user_document_ingestion import SUPPORTED_EXTENSIONS, ingest_user_document
 except ImportError:
 	from rag.memory import save_memory_turn
 	from rag.orchestrator import compile_prompt_with_orchestrator
 	from rag.rag_agent import build_generation_chain
+	from rag.user_document_ingestion import SUPPORTED_EXTENSIONS, ingest_user_document
+
+
+MAX_USER_DOCUMENT_BYTES = 25 * 1024 * 1024
+UPLOAD_READ_CHUNK_BYTES = 64 * 1024
 
 
 class PromptRequest(BaseModel):
@@ -92,6 +101,61 @@ def create_app() -> FastAPI:
 	@app.get("/health")
 	async def health() -> dict[str, str]:
 		return {"status": "ok"}
+
+	@app.post("/documents/upload", status_code=status.HTTP_201_CREATED)
+	async def upload_user_document(
+		file: UploadFile = File(...),
+		current_user: CurrentUser = Depends(get_current_user),
+	) -> dict[str, Any]:
+		"""Ingest a PDF or notebook for the authenticated user."""
+		submitted_name = file.filename or ""
+		file_name = Path(submitted_name.replace("\\", "/")).name
+		if not file_name or file_name in {".", ".."}:
+			raise HTTPException(status_code=400, detail="A document filename is required.")
+		if len(file_name) > 255:
+			raise HTTPException(status_code=400, detail="Document filename must be at most 255 characters.")
+
+		file_suffix = Path(file_name).suffix.lower()
+		if file_suffix not in SUPPORTED_EXTENSIONS:
+			raise HTTPException(
+				status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+				detail="Only PDF and Jupyter notebook files are supported.",
+			)
+
+		try:
+			with tempfile.TemporaryDirectory(prefix="user-document-") as temp_dir:
+				file_path = Path(temp_dir) / file_name
+				total_bytes = 0
+				with file_path.open("wb") as destination:
+					while chunk := await file.read(UPLOAD_READ_CHUNK_BYTES):
+						total_bytes += len(chunk)
+						if total_bytes > MAX_USER_DOCUMENT_BYTES:
+							raise HTTPException(
+								status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+								detail="Document exceeds the 25 MiB upload limit.",
+							)
+						destination.write(chunk)
+
+				if total_bytes == 0:
+					raise HTTPException(status_code=400, detail="Uploaded document is empty.")
+
+				try:
+					result = await run_in_threadpool(
+						ingest_user_document,
+						file_path=file_path,
+						user_id=current_user.user_id,
+					)
+				except ValueError as error:
+					raise HTTPException(status_code=400, detail=str(error)) from error
+		finally:
+			await file.close()
+
+		return {
+			"id_document": result["id_document"],
+			"id_user": result["id_user"],
+			"file_name": file_name,
+			"chunk_count": result["chunk_count"],
+		}
 
 	@app.post("/auth/register", status_code=status.HTTP_201_CREATED)
 	async def register(request: RegisterRequest, response: Response) -> dict[str, str]:

@@ -8,12 +8,16 @@ import "katex/dist/katex.min.css";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Bot,
+  CheckCircle2,
+  FileText,
+  Loader2,
   LogOut,
   MessageSquareText,
   Plus,
   SendHorizontal,
   Sparkles,
   Trash2,
+  Upload,
   UserCircle2,
 } from "lucide-react";
 import {
@@ -23,7 +27,10 @@ import {
   fetchChatSessions,
   streamPrompt,
 } from "../api/chatApi";
+import { uploadUserDocument } from "../api/documentApi";
 import { useAuth } from "../context/AuthContext";
+
+const MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 function truncateTitle(title) {
   const raw = String(title || "Untitled Chat");
@@ -226,11 +233,17 @@ export default function ChatPage() {
   const [deleteError, setDeleteError] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
+  const [isUploadingDocument, setIsUploadingDocument] = useState(false);
+  const [isDocumentDragActive, setIsDocumentDragActive] = useState(false);
+  const [documentUploadProgress, setDocumentUploadProgress] = useState(0);
+  const [documentUploadStatus, setDocumentUploadStatus] = useState("");
+  const [documentUploadError, setDocumentUploadError] = useState("");
 
   const sessionsRef = useRef({});
   const streamingSessionRef = useRef(null);
   const messagesBoxRef = useRef(null);
   const deleteDialogRef = useRef(null);
+  const documentInputRef = useRef(null);
   const chatSessions = chatSessionsState;
 
   const setChatSessions = useCallback((updaterOrValue) => {
@@ -376,6 +389,75 @@ export default function ChatPage() {
     const result = await logout();
     setInfoMessage(result.message || "Successfully logged out");
     navigate("/auth", { replace: true });
+  };
+
+  const handleDocumentUpload = async (file) => {
+    if (!file || isUploadingDocument) {
+      return;
+    }
+
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (!["pdf", "ipynb"].includes(extension)) {
+      setDocumentUploadError("Choose a PDF or Jupyter notebook.");
+      setDocumentUploadStatus("");
+      documentInputRef.current?.focus();
+      return;
+    }
+    if (file.size === 0) {
+      setDocumentUploadError("Choose a non-empty document.");
+      setDocumentUploadStatus("");
+      documentInputRef.current?.focus();
+      return;
+    }
+    if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+      setDocumentUploadError("The file is larger than the 25 MiB limit.");
+      setDocumentUploadStatus("");
+      documentInputRef.current?.focus();
+      return;
+    }
+
+    setDocumentUploadError("");
+    setDocumentUploadStatus("");
+    setDocumentUploadProgress(0);
+    setIsUploadingDocument(true);
+
+    try {
+      const result = await uploadUserDocument(
+        backendUrl,
+        file,
+        setDocumentUploadProgress,
+      );
+
+      if (!result.ok) {
+        setDocumentUploadError(result.error || "Could not upload document.");
+        return;
+      }
+
+      setDocumentUploadProgress(100);
+      setDocumentUploadStatus(
+        `${result.document.fileName} added (${result.document.chunkCount} chunks processed).`,
+      );
+    } catch (error) {
+      setDocumentUploadError(String(error?.message || "Could not upload document."));
+    } finally {
+      setIsUploadingDocument(false);
+    }
+  };
+
+  const handleDocumentInputChange = (event) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (file) {
+      handleDocumentUpload(file);
+    }
+  };
+
+  const handleDocumentDrop = (event) => {
+    event.preventDefault();
+    setIsDocumentDragActive(false);
+    if (!isUploadingDocument) {
+      handleDocumentUpload(event.dataTransfer.files?.[0]);
+    }
   };
 
   const handleNewChat = async () => {
@@ -663,7 +745,7 @@ export default function ChatPage() {
 
   return (
     <section className="chat-layout">
-      <aside className="chat-sidebar" aria-label="Chat history">
+      <aside className="chat-sidebar" aria-label="Workspace">
         <div className="sidebar-heading">
           <div>
             <p className="sidebar-eyebrow">YOUR WORKSPACE</p>
@@ -681,6 +763,83 @@ export default function ChatPage() {
           <Plus size={15} />
           New Chat
         </button>
+
+        <section className="document-upload-panel" aria-labelledby="document-upload-title">
+          <div className="document-upload-heading">
+            <span className="document-upload-icon" aria-hidden="true">
+              <FileText size={16} />
+            </span>
+            <div>
+              <h3 id="document-upload-title">Your materials</h3>
+              <p>Personal study files</p>
+            </div>
+          </div>
+          <label
+            className={`document-dropzone ${isDocumentDragActive ? "is-drag-active" : ""} ${
+              isUploadingDocument ? "is-uploading" : ""
+            }`}
+            htmlFor="document-upload-input"
+            onDragOver={(event) => {
+              event.preventDefault();
+              if (!isUploadingDocument) {
+                setIsDocumentDragActive(true);
+              }
+            }}
+            onDragLeave={() => setIsDocumentDragActive(false)}
+            onDrop={handleDocumentDrop}
+          >
+            <input
+              ref={documentInputRef}
+              id="document-upload-input"
+              className="visually-hidden document-file-input"
+              type="file"
+              accept=".pdf,.ipynb"
+              aria-describedby="document-upload-help document-upload-feedback document-upload-error"
+              aria-invalid={Boolean(documentUploadError)}
+              disabled={isUploadingDocument}
+              onChange={handleDocumentInputChange}
+            />
+            <span className="document-dropzone-icon" aria-hidden="true">
+              {isUploadingDocument ? <Loader2 size={17} /> : <Upload size={17} />}
+            </span>
+            <span className="document-dropzone-title">
+              {isUploadingDocument ? "Uploading and indexing…" : "Choose a file or drop it here"}
+            </span>
+            <span id="document-upload-help" className="document-dropzone-help">
+              PDF or notebook · Up to 25 MiB
+            </span>
+          </label>
+          {isUploadingDocument ? (
+            <progress
+              className="document-upload-progress"
+              max="100"
+              value={documentUploadProgress}
+              aria-label="Document upload progress"
+            />
+          ) : null}
+          <p
+            id="document-upload-feedback"
+            className={`document-upload-status ${isUploadingDocument ? "is-pending" : ""}`}
+            role="status"
+            aria-live="polite"
+          >
+            {isUploadingDocument ? "Uploading and indexing document…" : documentUploadStatus}
+          </p>
+          <p
+            id="document-upload-error"
+            className={`document-upload-error ${documentUploadError ? "" : "visually-hidden"}`}
+            role="alert"
+            aria-atomic="true"
+          >
+            {documentUploadError}
+          </p>
+          {documentUploadStatus ? (
+            <p className="document-upload-confirmation">
+              <CheckCircle2 size={14} aria-hidden="true" />
+                Document added to your materials
+            </p>
+          ) : null}
+        </section>
 
         {chatOrder.length === 0 ? (
           <p className="sidebar-empty">Your conversations will show up here.</p>

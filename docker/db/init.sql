@@ -9,6 +9,23 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS documents (
+    id_document VARCHAR(36) PRIMARY KEY,
+    file_name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_documents (
+    id_document VARCHAR(36) NOT NULL,
+    id_user VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id_document, id_user),
+    CONSTRAINT fk_user_documents_document
+        FOREIGN KEY (id_document) REFERENCES documents(id_document) ON DELETE CASCADE,
+    CONSTRAINT fk_user_documents_user
+        FOREIGN KEY (id_user) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS session (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL,
@@ -30,3 +47,4 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX idx_session_user_updated ON session (user_id, updated_at);
 CREATE INDEX idx_messages_session_created ON messages (session_id, created_at);
+CREATE INDEX idx_user_documents_user ON user_documents (id_user);

@@ -18,6 +18,86 @@ def test_health_endpoint_is_public(api_client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_authenticated_user_can_upload_document(
+    authenticated_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_ingest_user_document(*, file_path: Any, user_id: str) -> dict[str, Any]:
+        captured["file_name"] = file_path.name
+        captured["content"] = file_path.read_bytes()
+        captured["user_id"] = user_id
+        return {
+            "id_document": "document-1",
+            "id_user": user_id,
+            "file_name": file_path.name,
+            "chunk_count": 2,
+        }
+
+    monkeypatch.setattr(main, "ingest_user_document", fake_ingest_user_document)
+
+    response = authenticated_client.post(
+        "/documents/upload",
+        files={"file": ("lesson.pdf", b"pdf content", "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "id_document": "document-1",
+        "id_user": "test-user",
+        "file_name": "lesson.pdf",
+        "chunk_count": 2,
+    }
+    assert captured == {
+        "file_name": "lesson.pdf",
+        "content": b"pdf content",
+        "user_id": "test-user",
+    }
+
+
+def test_document_upload_rejects_anonymous_user(
+    api_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        main,
+        "ingest_user_document",
+        lambda **_: pytest.fail("Anonymous uploads must not enter ingestion."),
+    )
+
+    response = api_client.post(
+        "/documents/upload",
+        files={"file": ("lesson.pdf", b"pdf content", "application/pdf")},
+    )
+
+    assert response.status_code == 401
+
+
+def test_document_upload_rejects_unsupported_and_oversized_files(
+    authenticated_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        main,
+        "ingest_user_document",
+        lambda **_: pytest.fail("Invalid uploads must not enter ingestion."),
+    )
+
+    unsupported = authenticated_client.post(
+        "/documents/upload",
+        files={"file": ("slides.docx", b"content", "application/octet-stream")},
+    )
+    monkeypatch.setattr(main, "MAX_USER_DOCUMENT_BYTES", 3)
+    oversized = authenticated_client.post(
+        "/documents/upload",
+        files={"file": ("lesson.pdf", b"four", "application/pdf")},
+    )
+
+    assert unsupported.status_code == 415
+    assert oversized.status_code == 413
+
+
 def test_protected_chat_endpoint_rejects_anonymous_request(api_client: TestClient) -> None:
     response = api_client.get("/chat/sessions")
 

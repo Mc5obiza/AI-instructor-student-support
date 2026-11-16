@@ -214,3 +214,26 @@ docker compose down
 Registration requires a username of at least 2 characters, a valid email, and a password of at least 8 characters.
 
 If login returns a database access-denied error for `ai_user`, set `DB_PASSWORD` in the root `.env` to the password configured for that database account. With Docker Compose, MariaDB only creates the account from these environment values when its data volume is first initialized; changing `.env` later does not update the stored account password. Update the MariaDB account password to match `.env` or restore the original value, then restart the backend. Do not remove the database volume unless you intend to erase its data.
+
+## User document ingestion
+
+The standalone ingestion script accepts one PDF or Jupyter notebook for an existing user. It stores document metadata in MariaDB (`documents` and `user_documents`) and chunks/embeddings in the separate `user_document_chunks` Chroma collection. It does not modify the global course collections or copy the original file; the source remains at its current path until file storage is added.
+
+Apply the document tables from `docker/db/init.sql` to an existing database if it was initialized before these tables were added. With MariaDB on port `3306`, the database and Ollama settings configured, and the `nomic-embed-text` model available, run this from the repository root in `agents_env`:
+
+```powershell
+conda activate agents_env
+python -m scripts.ingest_user_document --file "C:\path\to\document.pdf" --user-id "<existing users.id>"
+```
+
+To verify MariaDB persistence with a real database connection (without calling Ollama), start MariaDB, configure `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`, and apply the document tables first. Then run:
+
+```powershell
+conda activate agents_env
+$env:RUN_MARIADB_INTEGRATION = "1"
+pytest tests/integration/test_user_document_persistence.py -q
+```
+
+This opt-in test uses an existing user, ingests a small test document, verifies the committed document-owner relationship from a fresh database connection, and removes the temporary document row. It skips if the database has no users. Without `RUN_MARIADB_INTEGRATION=1`, it is skipped.
+
+The chat sidebar provides a dropzone and file picker for PDF or Jupyter notebook uploads up to 25 MiB. The authenticated FastAPI endpoint `POST /documents/upload` accepts a multipart `file` field, assigns ownership from the authenticated account, and returns the new document ID and processed chunk count. The endpoint stores only the filename and indexed chunks; file-object storage is deferred.

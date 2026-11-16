@@ -814,6 +814,168 @@ body {
   line-height: 1.6;
 }
 
+.document-upload-panel {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #ececf0;
+  border-radius: 11px;
+  background: #fcfcfd;
+}
+
+.document-upload-heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.document-upload-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 9px;
+  background: #fff0ee;
+  color: var(--accent);
+}
+
+.document-upload-heading h3 {
+  margin: 0;
+  color: #33343d;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.document-upload-heading p {
+  margin: 3px 0 0;
+  color: #6f717b;
+  font-size: 11px;
+}
+
+.document-dropzone {
+  position: relative;
+  display: flex;
+  min-height: 96px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 10px;
+  border: 1px dashed #d9d9e0;
+  border-radius: 9px;
+  background: #fff;
+  color: #656671;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+
+.document-dropzone:hover,
+.document-dropzone.is-drag-active {
+  border-color: var(--accent);
+  background: #fff8f7;
+}
+
+.document-dropzone.is-uploading {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.document-dropzone:focus-within {
+  outline: 3px solid #c94339;
+  outline-offset: 2px;
+}
+
+.document-dropzone-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: #fff2f0;
+  color: var(--accent);
+}
+
+.document-dropzone-title {
+  color: #3e3f48;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.document-dropzone-help {
+  color: #6f717b;
+  font-size: 10px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.document-file-input {
+  inset: auto;
+}
+
+.document-upload-progress {
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  accent-color: var(--accent);
+}
+
+.document-upload-status,
+.document-upload-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.document-upload-status:not(:empty) {
+  color: #27865d;
+}
+
+.document-upload-status.is-pending {
+  color: #6f717b;
+}
+
+.document-upload-error:not(:empty) {
+  color: #bd3831;
+}
+
+.document-upload-confirmation {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: #27865d;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+@keyframes document-upload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .document-dropzone.is-uploading .document-dropzone-icon svg {
+    animation: document-upload-spin 1s linear infinite;
+  }
+}
+
 .chat-list {
   overflow-y: auto;
   margin-top: 16px;
@@ -1396,3 +1558,4 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
