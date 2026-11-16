@@ -47,6 +47,7 @@ function StudyForm({
   backendUrl,
   onGenerated,
   onClear,
+  onLoadingChange,
   result,
 }) {
   const isQuiz = mode === "quiz";
@@ -66,26 +67,33 @@ function StudyForm({
 
     setError("");
     setIsLoading(true);
+    onLoadingChange(true);
     onClear();
 
-    const response = isQuiz
-      ? await generateQuiz(backendUrl, {
-          subject: cleanTopic,
-          numberQuizzes: itemCount,
-          numberOptions: optionCount,
-        })
-      : await generateFlashcards(backendUrl, {
-          topic: cleanTopic,
-          numberFlashcards: itemCount,
-        });
+    try {
+      const response = isQuiz
+        ? await generateQuiz(backendUrl, {
+            subject: cleanTopic,
+            numberQuizzes: itemCount,
+            numberOptions: optionCount,
+          })
+        : await generateFlashcards(backendUrl, {
+            topic: cleanTopic,
+            numberFlashcards: itemCount,
+          });
 
-    setIsLoading(false);
-    if (!response.ok) {
-      setError(response.error || `Could not generate ${label.toLowerCase()}.`);
-      return;
+      if (!response.ok) {
+        setError(response.error || `Could not generate ${label.toLowerCase()}.`);
+        return;
+      }
+
+      onGenerated(response.data);
+    } catch (requestError) {
+      setError(String(requestError?.message || `Could not generate ${label.toLowerCase()}.`));
+    } finally {
+      setIsLoading(false);
+      onLoadingChange(false);
     }
-
-    onGenerated(response.data);
   };
 
   return (
@@ -142,11 +150,6 @@ function StudyForm({
         <p>Generated from your indexed course material.</p>
       </div>
       {error ? <p className="study-error" role="alert">{error}</p> : null}
-      {isLoading ? (
-        <p className="study-loading-note" role="status" aria-live="polite">
-          Searching your course material and preparing {label.toLowerCase()}…
-        </p>
-      ) : null}
       {result ? (
         <button
           type="button"
@@ -161,6 +164,50 @@ function StudyForm({
         </button>
       ) : null}
     </form>
+  );
+}
+
+function StudyLoadingState({ isQuiz }) {
+  const itemLabel = isQuiz ? "quiz" : "flashcards";
+
+  return (
+    <section
+      className={`study-loading-card ${isQuiz ? "is-quiz-loading" : "is-flashcards-loading"}`}
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      aria-label={`Creating ${itemLabel}`}
+    >
+      <div className="study-loading-heading">
+        <span className="study-loading-orbit" aria-hidden="true">
+          <Sparkles size={17} />
+        </span>
+        <span>
+          <strong>Making your {itemLabel}</strong>
+          <span>Searching your course material and preparing a grounded set…</span>
+        </span>
+      </div>
+      <div className="study-loading-preview" aria-hidden="true">
+        <span className="study-skeleton-line skeleton-title" />
+        <span className="study-skeleton-line skeleton-copy" />
+        {isQuiz ? (
+          <div className="study-skeleton-options">
+            <span className="study-skeleton-option" />
+            <span className="study-skeleton-option" />
+            <span className="study-skeleton-option" />
+          </div>
+        ) : (
+          <span className="study-skeleton-flashcard">
+            <span className="study-skeleton-line skeleton-card-copy" />
+          </span>
+        )}
+      </div>
+      <span className="study-loading-dots" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </span>
+    </section>
   );
 }
 
@@ -338,6 +385,7 @@ function FlashcardPractice({ cards }) {
 export default function StudyToolsPanel({ mode, backendUrl }) {
   const [result, setResult] = useState(null);
   const [answers, setAnswers] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
   const isQuiz = mode === "quiz";
 
   const handleGenerated = (data) => {
@@ -370,6 +418,7 @@ export default function StudyToolsPanel({ mode, backendUrl }) {
         mode={mode}
         backendUrl={backendUrl}
         onGenerated={handleGenerated}
+        onLoadingChange={setIsLoading}
         onClear={() => {
           setResult(null);
           setAnswers([]);
@@ -377,7 +426,9 @@ export default function StudyToolsPanel({ mode, backendUrl }) {
         result={result}
       />
 
-      {result ? (
+      {isLoading ? (
+        <StudyLoadingState isQuiz={isQuiz} />
+      ) : result ? (
         <>
           {isQuiz ? (
             <QuizPractice
