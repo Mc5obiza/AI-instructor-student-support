@@ -10,8 +10,10 @@ import {
   Bot,
   CheckCircle2,
   FileText,
+  Layers3,
   Loader2,
   LogOut,
+  MessagesSquare,
   MessageSquareText,
   Plus,
   SendHorizontal,
@@ -28,6 +30,7 @@ import {
   streamPrompt,
 } from "../api/chatApi";
 import { uploadUserDocument } from "../api/documentApi";
+import StudyToolsPanel from "../components/StudyToolsPanel";
 import { useAuth } from "../context/AuthContext";
 
 const MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -225,6 +228,7 @@ export default function ChatPage() {
   const [chatSessionsState, setChatSessionsState] = useState({});
   const [chatOrder, setChatOrder] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
+  const [workspaceMode, setWorkspaceMode] = useState("chat");
   const [prompt, setPrompt] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -881,88 +885,137 @@ export default function ChatPage() {
         <div className="chat-topbar">
           <p className="session-badge">
             <Sparkles size={14} />
-            Private learning session
+            Course workspace
           </p>
+          <div className="workspace-tabs" role="group" aria-label="Learning workspace">
+            <button
+              id="workspace-tab-chat"
+              type="button"
+              aria-pressed={workspaceMode === "chat"}
+              className={`workspace-tab ${workspaceMode === "chat" ? "active" : ""}`}
+              onClick={() => setWorkspaceMode("chat")}
+            >
+              <MessagesSquare size={15} />
+              Chat
+            </button>
+            <button
+              id="workspace-tab-quiz"
+              type="button"
+              aria-pressed={workspaceMode === "quiz"}
+              className={`workspace-tab ${workspaceMode === "quiz" ? "active" : ""}`}
+              onClick={() => setWorkspaceMode("quiz")}
+            >
+              <Sparkles size={15} />
+              Quiz
+            </button>
+            <button
+              id="workspace-tab-flashcards"
+              type="button"
+              aria-pressed={workspaceMode === "flashcards"}
+              className={`workspace-tab ${workspaceMode === "flashcards" ? "active" : ""}`}
+              onClick={() => setWorkspaceMode("flashcards")}
+            >
+              <Layers3 size={15} />
+              Flashcards
+            </button>
+          </div>
           <button type="button" className="secondary-button" onClick={handleLogout}>
             <LogOut size={15} />
             Logout
           </button>
         </div>
 
-        {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
-        {infoMessage ? <p className="info-text">{infoMessage}</p> : null}
-        {isSyncing ? <p className="muted-text">Syncing chats...</p> : null}
+        <div
+          id="workspace-panel"
+          className={`workspace-panel ${workspaceMode === "chat" ? "chat-mode-panel" : "study-mode-panel"}`}
+          role="region"
+          aria-label={workspaceMode === "chat" ? "Course chat" : workspaceMode === "quiz" ? "Quiz practice" : "Flashcard practice"}
+        >
+          {workspaceMode === "chat" ? (
+            <>
+              {errorMessage ? <p className="error-text">{errorMessage}</p> : null}
+              {infoMessage ? <p className="info-text">{infoMessage}</p> : null}
+              {isSyncing ? <p className="muted-text">Syncing chats...</p> : null}
 
-        <div className="messages-box" ref={messagesBoxRef} aria-live="polite">
-          {currentMessages.length === 0 ? (
-            <div className="chat-empty-state">
-              <div className="empty-state-icon" aria-hidden="true">
-                <Sparkles size={22} />
-              </div>
-              <p className="empty-state-eyebrow">YOUR STUDY COMPANION</p>
-              <h2>What are you learning today?</h2>
-              <p className="empty-state-copy">
-                Ask a question about your course material and get a clear, grounded explanation.
-              </p>
-              <div className="suggested-prompts" aria-label="Suggested questions">
-                {[
-                  "When should I use a decision tree?",
-                  "Explain gradient descent simply",
-                  "How do I handle missing data?",
-                ].map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    type="button"
-                    className="suggestion-button"
-                    onClick={() => setPrompt(suggestion)}
-                  >
-                    {suggestion}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <AnimatePresence initial={false}>
-              {currentMessages.map((message, index) => (
-                <motion.div
-                  layout
-                  key={`${message.role}-${index}`}
-                  className={`message-row ${message.role}`}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.18 }}
-                >
-                  <div className="message-bubble">
-                    <strong>
-                      {message.role === "user" ? <UserCircle2 size={14} /> : <Bot size={14} />}
-                      {message.role === "user" ? "You" : "Assistant"}
-                    </strong>
-                    <div className="message-markdown">
-                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                        {normalizeMathMarkdown(String(message.content || ""))}
-                      </ReactMarkdown>
+              <div className="messages-box" ref={messagesBoxRef} aria-live="polite">
+                {currentMessages.length === 0 ? (
+                  <div className="chat-empty-state">
+                    <div className="empty-state-icon" aria-hidden="true">
+                      <Sparkles size={22} />
+                    </div>
+                    <p className="empty-state-eyebrow">YOUR STUDY COMPANION</p>
+                    <h2>What are you learning today?</h2>
+                    <p className="empty-state-copy">
+                      Ask a question about your course material and get a clear, grounded explanation.
+                    </p>
+                    <div className="suggested-prompts" aria-label="Suggested questions">
+                      {[
+                        "When should I use a decision tree?",
+                        "Explain gradient descent simply",
+                        "How do I handle missing data?",
+                      ].map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          className="suggestion-button"
+                          onClick={() => setPrompt(suggestion)}
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          )}
-        </div>
+                ) : (
+                  <AnimatePresence initial={false}>
+                    {currentMessages.map((message, index) => (
+                      <motion.div
+                        layout
+                        key={`${message.role}-${index}`}
+                        className={`message-row ${message.role}`}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.18 }}
+                      >
+                        <div className="message-bubble">
+                          <strong>
+                            {message.role === "user" ? <UserCircle2 size={14} /> : <Bot size={14} />}
+                            {message.role === "user" ? "You" : "Assistant"}
+                          </strong>
+                          <div className="message-markdown">
+                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                              {normalizeMathMarkdown(String(message.content || ""))}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                )}
+              </div>
 
-        <form className="prompt-form" onSubmit={handleSendPrompt}>
-          <input
-            type="text"
-            aria-label="Ask a question about your course material"
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Ask anything about your course material..."
-            disabled={isStreaming}
-          />
-          <button type="submit" disabled={isStreaming}>
-            <SendHorizontal size={15} />
-            {isStreaming ? "Sending..." : "Send"}
-          </button>
-        </form>
+              <form className="prompt-form" onSubmit={handleSendPrompt}>
+                <input
+                  type="text"
+                  aria-label="Ask a question about your course material"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Ask anything about your course material..."
+                  disabled={isStreaming}
+                />
+                <button type="submit" disabled={isStreaming}>
+                  <SendHorizontal size={15} />
+                  {isStreaming ? "Sending..." : "Send"}
+                </button>
+              </form>
+            </>
+          ) : null}
+          <div className="study-panel-slot" hidden={workspaceMode !== "quiz"}>
+            <StudyToolsPanel mode="quiz" backendUrl={backendUrl} />
+          </div>
+          <div className="study-panel-slot" hidden={workspaceMode !== "flashcards"}>
+            <StudyToolsPanel mode="flashcards" backendUrl={backendUrl} />
+          </div>
+        </div>
       </div>
       {pendingDeleteSession ? (
         <div

@@ -7,6 +7,14 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend import main
+from backend.rag.study_materials import NoStudyContextError, StudyMaterialGenerationError
+from backend.schemas import (
+	Flashcard,
+	FlashcardsResponse,
+	QuizQuestion,
+	QuizResponse,
+	SourceAttribution,
+)
 
 pytestmark = pytest.mark.feature
 
@@ -102,6 +110,100 @@ def test_protected_chat_endpoint_rejects_anonymous_request(api_client: TestClien
     response = api_client.get("/chat/sessions")
 
     assert response.status_code == 401
+
+
+def test_quiz_and_flashcard_endpoints_return_grounded_results(
+    authenticated_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+    source = SourceAttribution(
+        source_id=1,
+        course="Statistics",
+        section="Mean",
+        source_file="statistics.pdf",
+        chunk_id="chunk-2",
+    )
+
+    def fake_quiz(subject: str, number_quizzes: int, number_options: int) -> QuizResponse:
+        calls.append(("quiz", (subject, number_quizzes, number_options)))
+        return QuizResponse(
+            topic=subject,
+            nb_questions=number_quizzes,
+            quizz=[
+                QuizQuestion(
+                    question="What is the mean? [1]",
+                    options=["Average", "Mode"],
+                    correct="Average",
+                )
+            ],
+            sources=[source],
+        )
+
+    def fake_flashcards(topic: str, number_flashcards: int) -> FlashcardsResponse:
+        calls.append(("flashcards", (topic, number_flashcards)))
+        return FlashcardsResponse(
+            topic=topic,
+            flashcards=[Flashcard(front="What is the mean?", back="The average. [1]")],
+            sources=[source],
+        )
+
+    monkeypatch.setattr(main, "generate_quiz", fake_quiz)
+    monkeypatch.setattr(main, "generate_flashcards", fake_flashcards)
+
+    quiz = authenticated_client.post(
+        "/quizz/",
+        json={"subject": " Mean ", "number_quizzes": 1, "number_options": 2},
+    )
+    flashcards = authenticated_client.post(
+        "/flashcard/",
+        json={"topic": " Mean ", "number_flashcards": 1},
+    )
+
+    assert quiz.status_code == 200
+    assert quiz.json()["quizz"][0]["correct"] == "Average"
+    assert quiz.json()["sources"][0]["source_file"] == "statistics.pdf"
+    assert flashcards.status_code == 200
+    assert flashcards.json()["flashcards"][0]["back"] == "The average. [1]"
+    assert flashcards.json()["sources"][0]["chunk_id"] == "chunk-2"
+    assert calls == [
+        ("quiz", ("Mean", 1, 2)),
+        ("flashcards", ("Mean", 1)),
+    ]
+
+
+def test_study_material_endpoints_require_authentication(api_client: TestClient) -> None:
+    quiz = api_client.post("/quizz/", json={"subject": "Mean"})
+    flashcards = api_client.post("/flashcard/", json={"topic": "Mean"})
+
+    assert quiz.status_code == 401
+    assert flashcards.status_code == 401
+
+
+def test_study_material_errors_have_explicit_http_statuses(
+    authenticated_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(
+        main,
+        "generate_quiz",
+        lambda *_: (_ for _ in ()).throw(NoStudyContextError("No matching course chunks.")),
+    )
+    monkeypatch.setattr(
+        main,
+        "generate_flashcards",
+        lambda *_: (_ for _ in ()).throw(
+            StudyMaterialGenerationError("The model returned invalid cards.")
+        ),
+    )
+
+    quiz = authenticated_client.post("/quizz/", json={"subject": "Mean"})
+    flashcards = authenticated_client.post("/flashcard/", json={"topic": "Mean"})
+
+    assert quiz.status_code == 422
+    assert quiz.json()["detail"] == "No matching course chunks."
+    assert flashcards.status_code == 502
+    assert flashcards.json()["detail"] == "The model returned invalid cards."
 
 
 def test_registration_validates_email_before_database_access(api_client: TestClient) -> None:

@@ -13,6 +13,33 @@ from pydantic import BaseModel, EmailStr, Field
 from starlette.concurrency import run_in_threadpool
 
 try:
+	from backend.rag.study_materials import (
+		NoStudyContextError,
+		StudyMaterialGenerationError,
+		generate_flashcards,
+		generate_quiz,
+	)
+	from backend.schemas import (
+		FlashcardsRequest,
+		FlashcardsResponse,
+		QuizRequest,
+		QuizResponse,
+	)
+except ImportError:
+	from rag.study_materials import (
+		NoStudyContextError,
+		StudyMaterialGenerationError,
+		generate_flashcards,
+		generate_quiz,
+	)
+	from schemas import (
+		FlashcardsRequest,  # pyright: ignore[reportAttributeAccessIssue]
+		FlashcardsResponse,  # pyright: ignore[reportAttributeAccessIssue]
+		QuizRequest,  # pyright: ignore[reportAttributeAccessIssue]
+		QuizResponse,  # pyright: ignore[reportAttributeAccessIssue]
+	)
+
+try:
 	from backend.helper import (
 		CHAT_SESSION_COOKIE_NAME,
 		FRONTEND_ORIGINS,
@@ -101,6 +128,55 @@ def create_app() -> FastAPI:
 	@app.get("/health")
 	async def health() -> dict[str, str]:
 		return {"status": "ok"}
+
+	@app.post(
+		"/quizz/",
+		response_model=QuizResponse,
+		dependencies=[Depends(get_current_user)],
+	)
+	async def create_quiz(
+		request: QuizRequest,
+	) -> QuizResponse:
+		"""Generate an authenticated quiz from retrieved course material."""
+		subject = request.subject.strip()
+		if not subject:
+			raise HTTPException(status_code=400, detail="subject is required")
+
+		try:
+			return await run_in_threadpool(
+				generate_quiz,
+				subject,
+				request.number_quizzes,
+				request.number_options,
+			)
+		except NoStudyContextError as error:
+			raise HTTPException(status_code=422, detail=str(error)) from error
+		except StudyMaterialGenerationError as error:
+			raise HTTPException(status_code=502, detail=str(error)) from error
+
+	@app.post(
+		"/flashcard/",
+		response_model=FlashcardsResponse,
+		dependencies=[Depends(get_current_user)],
+	)
+	async def create_flashcards(
+		request: FlashcardsRequest,
+	) -> FlashcardsResponse:
+		"""Generate authenticated flashcards from retrieved course material."""
+		topic = request.topic.strip()
+		if not topic:
+			raise HTTPException(status_code=400, detail="topic is required")
+
+		try:
+			return await run_in_threadpool(
+				generate_flashcards,
+				topic,
+				request.number_flashcards,
+			)
+		except NoStudyContextError as error:
+			raise HTTPException(status_code=422, detail=str(error)) from error
+		except StudyMaterialGenerationError as error:
+			raise HTTPException(status_code=502, detail=str(error)) from error
 
 	@app.post("/documents/upload", status_code=status.HTTP_201_CREATED)
 	async def upload_user_document(

@@ -117,6 +117,15 @@ This project is designed to showcase production-minded AI engineering: retrieval
 The default test suite uses deterministic in-memory vector collections and mocked model/API boundaries. It does not connect to MariaDB, call Ollama, download models, or read the persisted production vector database.
 GitHub Actions runs this suite on Windows for pushes and pull requests targeting `main`; no live database is required.
 
+## Quiz and flashcard endpoints
+
+Authenticated students can generate course-grounded study material using the same Chroma retrieval and reranking pipeline as chat:
+
+- `POST /quizz/` accepts `{"subject":"decision trees","number_quizzes":3,"number_options":4}`.
+- `POST /flashcard/` accepts `{"topic":"decision trees","number_flashcards":7}`.
+
+Both responses include a `sources` list with course, section, source file, and chunk ID metadata. The generated questions/cards are limited to retrieved course content; requests without matching context return `422`, and invalid model output returns `502`. These endpoints use the existing authentication cookie and do not persist generated material.
+
 OpenRouter is the default chat provider. Set `OPENROUTER_API_KEY` to your OpenRouter API key in the root `.env` file, and optionally set `OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`). You can explicitly select local chat generation with `LLM_PROVIDER=ollama`. Ollama is still used for local embeddings in either configuration.
 
 Activate the project environment from the repository root before installing test tools or running Python:

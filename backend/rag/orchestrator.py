@@ -224,6 +224,34 @@ def code_reviewer_tool_node(state: OrchestratorState) -> OrchestratorState:
 	}
 
 
+def retrieve_rag_context(
+	question: str,
+	chat_llm: Any = None,
+	persist_dir: Path | None = None,
+	reranker_model: str = RERANKER_MODEL,
+) -> dict[str, Any]:
+	"""Run the shared course retrieval pipeline and return its ranked documents."""
+	if persist_dir is None:
+		backend_dir = Path(__file__).resolve().parent.parent
+		persist_dir = backend_dir / "vectordb" / "chroma_db"
+
+	reranker = CrossEncoder(reranker_model)
+	collections = get_collections(persist_dir=persist_dir)
+	retrieval_tool = build_retrieval_tool(
+		course_collection=collections["course_collection"],
+		part_collection=collections["part_collection"],
+		chunk_collection=collections["chunk_collection"],
+		reranker=reranker,
+		chat_llm=chat_llm,
+		top_k_courses=TOP_K_COURSES,
+		top_k_parts=TOP_K_PARTS,
+		top_k_chunks=TOP_K_CHUNKS,
+		top_k_final=TOP_K_FINAL,
+		context_token_limit=CONTEXT_TOKEN_LIMIT,
+	)
+	return run_retrieval_tool_node(question=question, retrieval_tool=retrieval_tool)
+
+
 def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
 	"""Call guard + retrieval tool path from orchestrator."""
 	question = state.get("question", "")
@@ -231,10 +259,6 @@ def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
 	llm_model = state.get("llm_model", LLM_MODEL)
 	reranker_model = state.get("reranker_model", RERANKER_MODEL)
 	persist_dir = state.get("persist_dir")
-
-	if persist_dir is None:
-		backend_dir = Path(__file__).resolve().parent.parent
-		persist_dir = backend_dir / "vectordb" / "chroma_db"
 
 	chat_llm = create_chat_client(
 		model=llm_model,
@@ -276,21 +300,12 @@ def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
 		summary_token_limit=MEMORY_SUMMARY_TOKEN_LIMIT,
 	)
 
-	reranker = CrossEncoder(reranker_model)
-	collections = get_collections(persist_dir=persist_dir)
-	retrieval_tool = build_retrieval_tool(
-		course_collection=collections["course_collection"],
-		part_collection=collections["part_collection"],
-		chunk_collection=collections["chunk_collection"],
-		reranker=reranker,
+	retrieval_update = retrieve_rag_context(
+		question=question,
 		chat_llm=chat_llm,
-		top_k_courses=TOP_K_COURSES,
-		top_k_parts=TOP_K_PARTS,
-		top_k_chunks=TOP_K_CHUNKS,
-		top_k_final=TOP_K_FINAL,
-		context_token_limit=CONTEXT_TOKEN_LIMIT,
+		persist_dir=persist_dir,
+		reranker_model=reranker_model,
 	)
-	retrieval_update = run_retrieval_tool_node(question=question, retrieval_tool=retrieval_tool)
 	if retrieval_update.get("status") != "ok":
 		return {
 			"status": "stop",
