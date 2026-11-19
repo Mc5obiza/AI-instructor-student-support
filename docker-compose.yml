@@ -59,11 +59,14 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_EMBEDDING_URL: http://ollama:11434/api/embeddings
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-sqlite:////app/mlflow.db}
+      RERANKER_DEVICE: ${RERANKER_DEVICE:-auto}
     ports:
       - "8000:8000"
     volumes:
       - ./backend/vectordb:/app/backend/vectordb
       - ./data:/app/data:ro
+      - ./mlflow.db:/app/mlflow.db
     healthcheck:
       test:
         [

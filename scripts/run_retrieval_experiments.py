@@ -14,7 +14,6 @@ import chromadb
 import mlflow
 from chromadb.utils import embedding_functions
 from langchain_core.documents import Document
-from sentence_transformers import CrossEncoder
 
 from backend.rag.pdf_processor import (
 	DEFAULT_EMBEDDING_MODEL,
@@ -28,6 +27,7 @@ from backend.rag.retriever import (
 	fuse_rankings_by_rrf,
 	tokenize_text,
 )
+from backend.rag.reranker import load_reranker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_PATH = PROJECT_ROOT / "data" / "processed" / "retrieval_golden_dataset.json"
@@ -391,6 +391,7 @@ def _run_index_sweep(
 	dataset_hash: str,
 	document_embedding_seconds: float,
 	reranker_model: str,
+	reranker_device: str,
 ) -> int:
 	"""Build isolated HNSW indexes and track one MLflow run per search setting."""
 	run_count = 0
@@ -469,6 +470,9 @@ def _run_index_sweep(
 										reranker_model
 										if method == "hybrid_rerank"
 										else "none"
+									),
+									"reranker_device": (
+										reranker_device if method == "hybrid_rerank" else "none"
 									),
 									"index_type": "hnsw",
 									"index_space": space,
@@ -551,11 +555,13 @@ def run_experiments(args: argparse.Namespace) -> int:
 		embedding_function,
 		[case["query"] for case in cases],
 	)
-	reranker = (
-		CrossEncoder(args.reranker_model, local_files_only=True)
-		if "hybrid_rerank" in args.retrieval_methods
-		else None
-	)
+	reranker = None
+	reranker_device = "none"
+	if "hybrid_rerank" in args.retrieval_methods:
+		reranker, reranker_device = load_reranker(
+			args.reranker_model,
+			local_files_only=True,
+		)
 	client = chromadb.EphemeralClient()
 	dataset_hash = hashlib.sha256(args.dataset.read_bytes()).hexdigest()
 
@@ -571,6 +577,7 @@ def run_experiments(args: argparse.Namespace) -> int:
 			}
 		)
 		mlflow.log_param("golden_cases", len(cases))
+		mlflow.log_param("reranker_device", reranker_device)
 		mlflow.log_metric("query_embedding_seconds", query_embedding_seconds)
 		mlflow.log_artifact(str(args.dataset), artifact_path="evaluation")
 
@@ -619,6 +626,7 @@ def run_experiments(args: argparse.Namespace) -> int:
 				dataset_hash=dataset_hash,
 				document_embedding_seconds=embedding_seconds,
 				reranker_model=args.reranker_model,
+				reranker_device=reranker_device,
 			)
 			total_runs += runs_for_chunking
 			mlflow.log_metric(

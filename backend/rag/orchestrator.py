@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, AsyncIterator, TypedDict, cast
 
 from langgraph.graph import END, START, StateGraph
-from sentence_transformers import CrossEncoder
 
 try:
 	from backend.llm_clients import DEFAULT_LLM_MODEL, create_chat_client
@@ -16,22 +15,22 @@ try:
 	)
 	from backend.rag.memory import prepare_memory_summary, save_memory_turn
 	from backend.rag.rag_agent import build_generation_chain, get_collections, guard_question
+	from backend.rag.reranker import load_reranker
+	from backend.rag.retrieval_strategy import load_registered_retrieval_strategy
 	from backend.rag.retriever import build_retrieval_tool, run_retrieval_tool_node
 except ImportError:
 	from llm_clients import DEFAULT_LLM_MODEL, create_chat_client
 	from rag.code_reviewer import get_code_reviewer_router_context, run_code_reviewer_tool_from_query
 	from rag.memory import prepare_memory_summary, save_memory_turn
 	from rag.rag_agent import build_generation_chain, get_collections, guard_question
+	from rag.reranker import load_reranker
+	from rag.retrieval_strategy import load_registered_retrieval_strategy
 	from rag.retriever import build_retrieval_tool, run_retrieval_tool_node
 
 
 LLM_MODEL = DEFAULT_LLM_MODEL
-RERANKER_MODEL = "BAAI/bge-reranker-base"
-
 TOP_K_COURSES = 3
 TOP_K_PARTS = 8
-TOP_K_CHUNKS = 20
-TOP_K_FINAL = 5
 CONTEXT_TOKEN_LIMIT = 5000
 
 MEMORY_MAX_TOKEN_LIMIT = 32000
@@ -45,7 +44,7 @@ class OrchestratorState(TypedDict, total=False):
 	session_id: str
 	persist_dir: Path | None
 	llm_model: str
-	reranker_model: str
+	reranker_model: str | None
 	route: str
 	status: str
 	message: str
@@ -228,14 +227,18 @@ def retrieve_rag_context(
 	question: str,
 	chat_llm: Any = None,
 	persist_dir: Path | None = None,
-	reranker_model: str = RERANKER_MODEL,
+	reranker_model: str | None = None,
 ) -> dict[str, Any]:
 	"""Run the shared course retrieval pipeline and return its ranked documents."""
 	if persist_dir is None:
 		backend_dir = Path(__file__).resolve().parent.parent
 		persist_dir = backend_dir / "vectordb" / "chroma_db"
 
-	reranker = CrossEncoder(reranker_model)
+	strategy = load_registered_retrieval_strategy()
+	selected_reranker_model = reranker_model or strategy.reranker_model
+	reranker = None
+	if strategy.retrieval_method == "hybrid_rerank" and selected_reranker_model:
+		reranker, _ = load_reranker(selected_reranker_model)
 	collections = get_collections(persist_dir=persist_dir)
 	retrieval_tool = build_retrieval_tool(
 		course_collection=collections["course_collection"],
@@ -245,11 +248,21 @@ def retrieve_rag_context(
 		chat_llm=chat_llm,
 		top_k_courses=TOP_K_COURSES,
 		top_k_parts=TOP_K_PARTS,
-		top_k_chunks=TOP_K_CHUNKS,
-		top_k_final=TOP_K_FINAL,
+		top_k_chunks=strategy.candidate_k,
+		top_k_final=strategy.top_k,
 		context_token_limit=CONTEXT_TOKEN_LIMIT,
+		retrieval_method=strategy.retrieval_method,
 	)
 	return run_retrieval_tool_node(question=question, retrieval_tool=retrieval_tool)
+
+
+def initialize_retrieval_runtime() -> None:
+	"""Load the registered reranker once before the API starts serving requests."""
+	strategy = load_registered_retrieval_strategy()
+	if strategy.retrieval_method == "hybrid_rerank":
+		if not strategy.reranker_model:
+			raise ValueError("The registered hybrid_rerank strategy has no reranker model.")
+		load_reranker(strategy.reranker_model)
 
 
 def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
@@ -257,7 +270,7 @@ def rag_retriever_tool_node(state: OrchestratorState) -> OrchestratorState:
 	question = state.get("question", "")
 	session_id = state.get("session_id", "default")
 	llm_model = state.get("llm_model", LLM_MODEL)
-	reranker_model = state.get("reranker_model", RERANKER_MODEL)
+	reranker_model = state.get("reranker_model")
 	persist_dir = state.get("persist_dir")
 
 	chat_llm = create_chat_client(
@@ -365,7 +378,7 @@ def compile_prompt_with_orchestrator(
 	session_id: str = "default",
 	persist_dir: Path | None = None,
 	llm_model: str = LLM_MODEL,
-	reranker_model: str = RERANKER_MODEL,
+	reranker_model: str | None = None,
 ) -> dict[str, Any]:
 	"""Run unified graph and normalize output for stream rendering."""
 	graph = get_orchestrator_graph()
@@ -412,7 +425,7 @@ async def stream_orchestrated_response(
 	session_id: str = "default",
 	persist_dir: Path | None = None,
 	llm_model: str = LLM_MODEL,
-	reranker_model: str = RERANKER_MODEL,
+	reranker_model: str | None = None,
 ) -> AsyncIterator[str]:
 	"""Stream one unified orchestrated response over either route."""
 	compiled = compile_prompt_with_orchestrator(

@@ -162,6 +162,14 @@ The optional HTML report is written to `htmlcov/`. Real-model and live-database 
 
 The golden retrieval set at `data/processed/retrieval_golden_dataset.json` labels relevant sources by `course`, `section`, and `source_file`, so evaluation labels remain valid when the corpus is re-chunked. Section comparison ignores whitespace and case to tolerate OCR inconsistencies. The runner compares chunk size/overlap, top-k, and Chroma HNSW distance/index settings, then logs hit rate, source recall, MRR, dense/rerank/total query latency, index build time, and embedding time to MLflow. Chunk lengths follow the existing whitespace-based token-like counter. The default methods are `dense` (vector only), `hybrid` (vector + BM25 with RRF), and `hybrid_rerank` (the same hybrid candidate set reranked using the project’s `BAAI/bge-reranker-base` CrossEncoder). Each child run also logs per-query gold labels and retrieved sources as `evaluation/retrieval_results.json`.
 
+The controlled ablation selected `hybrid_rerank` for top-5 retrieval: 100% hit rate and 0.983 MRR on the 30-query golden set. Register the highest-scoring finished top-5 strategy from `rag-retrieval-ablation` with:
+
+```powershell
+python -m scripts.register_retrieval_strategy
+```
+
+This creates/versions the `AIInstructorRetrievalStrategy` MLflow model and points its `champion` alias at the selected version. The live RAG path reads the version's strategy configuration from that alias, then uses its candidate count, final cutoff, BM25/RRF setting, and reranker model. The default tracking store is the repository-root `mlflow.db`; set `MLFLOW_TRACKING_URI` to use another MLflow tracking/registry server. Docker Compose mounts `mlflow.db` into the backend so its registry lookup uses the same store. The registered top-5 run recorded about **11.4 seconds/query** for CPU reranking, so treat this as the quality-first strategy and measure/optimize latency before using it under a strict response-time target.
+
 Run the default sweep from the repository root in `agents_env` with Ollama serving `nomic-embed-text`:
 
 ```powershell
@@ -177,6 +185,27 @@ mlflow ui --backend-store-uri sqlite:///./mlflow.db
 ```
 
 In the UI, select the `rag-retrieval-tuning` experiment. The sweep has one parent run and one child run per configuration; select a child run to inspect its chunk/index/top-k parameters and retrieval/latency metrics. The golden dataset is logged as a parent-run artifact under `evaluation/`.
+
+### GPU reranking
+
+The reranker uses `RERANKER_DEVICE=auto` by default: it selects CUDA when the installed PyTorch build and NVIDIA driver expose a CUDA device, otherwise it logs and uses CPU. Set `RERANKER_DEVICE=cuda` to require a GPU and fail clearly if CUDA is unavailable, or set it to `cpu`/`cuda:0` to choose a device explicitly. The selected device is logged in each reranker MLflow run.
+
+At API startup, the registered retrieval strategy is resolved and its reranker is loaded into a process-level cache before the server accepts requests. Requests reuse that model instance; each server worker maintains its own model copy.
+
+For the local `agents_env`, install a CUDA-enabled PyTorch 2.6.0 wheel (the example uses the CUDA 12.4 wheel) and then run retrieval as usual:
+
+```powershell
+python -m pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CUDA unavailable')"
+```
+
+For Docker, use the GPU Compose override, which selects the CUDA wheel and reserves the host GPUs:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+The host needs a compatible NVIDIA driver and NVIDIA Container Toolkit. The default Docker build remains CPU-only; install the CUDA wheel before expecting local reranker inference to use the GPU.
 
 See the [retrieval experiment report](./reports/retrieval-experiment-report.md) for the recorded tuning and reranker-ablation findings, including per-query ranking changes and evaluation caveats.
 

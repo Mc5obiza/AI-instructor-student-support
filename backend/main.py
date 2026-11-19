@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncGenerator, AsyncIterator
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,12 +87,15 @@ except ImportError:
 
 try:
 	from backend.rag.memory import save_memory_turn
-	from backend.rag.orchestrator import compile_prompt_with_orchestrator
+	from backend.rag.orchestrator import (
+		compile_prompt_with_orchestrator,
+		initialize_retrieval_runtime,
+	)
 	from backend.rag.rag_agent import build_generation_chain
 	from backend.rag.user_document_ingestion import SUPPORTED_EXTENSIONS, ingest_user_document
 except ImportError:
 	from rag.memory import save_memory_turn
-	from rag.orchestrator import compile_prompt_with_orchestrator
+	from rag.orchestrator import compile_prompt_with_orchestrator, initialize_retrieval_runtime
 	from rag.rag_agent import build_generation_chain
 	from rag.user_document_ingestion import SUPPORTED_EXTENSIONS, ingest_user_document
 
@@ -113,9 +117,20 @@ class RegisterRequest(BaseModel):
 	password: str = Field(..., min_length=8)
 
 
+@asynccontextmanager
+async def app_lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+	"""Initialize the registered retrieval model before accepting requests."""
+	initialize_retrieval_runtime()
+	yield
+
+
 def create_app() -> FastAPI:
 	"""Create and configure FastAPI application."""
-	app = FastAPI(title="AI Learning Assistant API", version="1.1.0")
+	app = FastAPI(
+		title="AI Learning Assistant API",
+		version="1.1.0",
+		lifespan=app_lifespan,
+	)
 
 	app.add_middleware(
 		CORSMiddleware,

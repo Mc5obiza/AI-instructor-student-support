@@ -6,6 +6,11 @@ from fastapi.testclient import TestClient
 from backend import helper, main
 
 
+@pytest.fixture(autouse=True)
+def skip_registered_model_preload_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "initialize_retrieval_runtime", lambda: None)
+
+
 @pytest.fixture
 def api_client() -> TestClient:
     main.app.dependency_overrides.clear()

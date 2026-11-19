@@ -283,15 +283,21 @@ def retrieve_context(
 	course_collection: Any,
 	part_collection: Any,
 	chunk_collection: Any,
-	reranker: Any,
+	reranker: Any | None,
 	chat_llm: Any,
 	top_k_courses: int = 3,
 	top_k_parts: int = 8,
 	top_k_chunks: int = 20,
 	top_k_final: int = 5,
 	context_token_limit: int = 5000,
+	retrieval_method: str = "hybrid_rerank",
 ) -> dict[str, Any]:
 	"""Course -> parts -> chunks retrieval, then rerank and compress."""
+	if retrieval_method not in {"dense", "hybrid", "hybrid_rerank"}:
+		raise ValueError(f"Unknown retrieval method: {retrieval_method}")
+	if retrieval_method == "hybrid_rerank" and reranker is None:
+		raise ValueError("The hybrid_rerank retrieval method requires a reranker.")
+
 	retrieval_question = normalize_retrieval_query(question)
 
 	# Anchor routing on chunk-level semantic hits to avoid course-name misrouting.
@@ -334,13 +340,19 @@ def retrieve_context(
 		top_k_chunks,
 		where={"course": selected_course},
 	)
-	chunk_bm25_hits = bm25_retrieve_documents(
-		chunk_collection,
-		retrieval_question,
-		top_k_chunks,
-		where={"course": selected_course},
-	)
-	chunk_hits = fuse_rankings_by_rrf([chunk_semantic_hits, chunk_bm25_hits], top_k=top_k_chunks)
+	if retrieval_method == "dense":
+		chunk_hits = chunk_semantic_hits
+	else:
+		chunk_bm25_hits = bm25_retrieve_documents(
+			chunk_collection,
+			retrieval_question,
+			top_k_chunks,
+			where={"course": selected_course},
+		)
+		chunk_hits = fuse_rankings_by_rrf(
+			[chunk_semantic_hits, chunk_bm25_hits],
+			top_k=top_k_chunks,
+		)
 
 	if selected_parts:
 		part_set = set(selected_parts)
@@ -348,7 +360,10 @@ def retrieve_context(
 		if part_filtered:
 			chunk_hits = part_filtered
 
-	ranked_docs = rerank_documents(question, chunk_hits, reranker=reranker, top_k=top_k_final)
+	if retrieval_method == "hybrid_rerank":
+		ranked_docs = rerank_documents(question, chunk_hits, reranker=reranker, top_k=top_k_final)
+	else:
+		ranked_docs = chunk_hits[:top_k_final]
 	if not ranked_docs:
 		return {"status": "stop", "message": "I do not have enough retrieved context to answer this reliably."}
 
@@ -374,6 +389,7 @@ def build_retrieval_tool(
 	top_k_chunks: int = 20,
 	top_k_final: int = 5,
 	context_token_limit: int = 5000,
+	retrieval_method: str = "hybrid_rerank",
 ) -> Any:
 	"""Create a retrieval tool with bound dependencies for graph/node usage."""
 
@@ -392,6 +408,7 @@ def build_retrieval_tool(
 			top_k_chunks=top_k_chunks,
 			top_k_final=top_k_final,
 			context_token_limit=context_token_limit,
+			retrieval_method=retrieval_method,
 		)
 
 	return rag_retrieval_tool

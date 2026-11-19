@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from backend.rag import orchestrator
+from backend.rag.retrieval_strategy import RetrievalStrategy
 
 pytestmark = pytest.mark.unit
 
@@ -163,7 +164,12 @@ def test_rag_node_passes_retrieved_context_to_graph_state(monkeypatch: pytest.Mo
         "prepare_memory_summary",
         lambda **_: (object(), "Earlier session summary"),
     )
-    monkeypatch.setattr(orchestrator, "CrossEncoder", lambda _: "reranker")
+    monkeypatch.setattr(
+        orchestrator,
+        "load_registered_retrieval_strategy",
+        lambda: RetrievalStrategy("hybrid_rerank", 20, 5, "BAAI/bge-reranker-base", "run-1"),
+    )
+    monkeypatch.setattr(orchestrator, "load_reranker", lambda _: ("reranker", "cpu"))
     monkeypatch.setattr(
         orchestrator,
         "get_collections",
@@ -204,7 +210,12 @@ def test_rag_node_stops_when_retrieval_has_no_relevant_context(
     monkeypatch.setattr(orchestrator, "create_chat_client", lambda **_: Chat())
     monkeypatch.setattr(orchestrator, "guard_question", lambda **_: {"status": "ok"})
     monkeypatch.setattr(orchestrator, "prepare_memory_summary", lambda **_: (object(), ""))
-    monkeypatch.setattr(orchestrator, "CrossEncoder", lambda _: "reranker")
+    monkeypatch.setattr(
+        orchestrator,
+        "load_registered_retrieval_strategy",
+        lambda: RetrievalStrategy("hybrid_rerank", 20, 5, "BAAI/bge-reranker-base", "run-1"),
+    )
+    monkeypatch.setattr(orchestrator, "load_reranker", lambda _: ("reranker", "cpu"))
     monkeypatch.setattr(
         orchestrator,
         "get_collections",
@@ -230,6 +241,77 @@ def test_rag_node_stops_when_retrieval_has_no_relevant_context(
         "route": "rag",
         "message": "No supporting chunks.",
     }
+
+
+def test_retrieve_rag_context_applies_registered_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    strategy = RetrievalStrategy(
+        "hybrid_rerank",
+        20,
+        5,
+        "BAAI/bge-reranker-base",
+        "evaluation-run",
+    )
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(orchestrator, "load_registered_retrieval_strategy", lambda: strategy)
+    monkeypatch.setattr(
+        orchestrator,
+        "load_reranker",
+        lambda model: (captured.setdefault("reranker_model", model), "cuda"),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "get_collections",
+        lambda **_: {
+            "course_collection": "courses",
+            "part_collection": "parts",
+            "chunk_collection": "chunks",
+        },
+    )
+
+    def build_tool(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(orchestrator, "build_retrieval_tool", build_tool)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_retrieval_tool_node",
+        lambda **_: {"status": "ok", "context": "retrieved"},
+    )
+
+    result = orchestrator.retrieve_rag_context("mean", chat_llm=object())
+
+    assert result["context"] == "retrieved"
+    assert captured["retrieval_method"] == "hybrid_rerank"
+    assert captured["top_k_chunks"] == 20
+    assert captured["top_k_final"] == 5
+    assert captured["reranker_model"] == "BAAI/bge-reranker-base"
+
+
+def test_initialize_retrieval_runtime_preloads_registered_reranker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded_models: list[str] = []
+    strategy = RetrievalStrategy(
+        "hybrid_rerank",
+        20,
+        5,
+        "BAAI/bge-reranker-base",
+        "evaluation-run",
+    )
+    monkeypatch.setattr(orchestrator, "load_registered_retrieval_strategy", lambda: strategy)
+    monkeypatch.setattr(
+        orchestrator,
+        "load_reranker",
+        lambda model_name: loaded_models.append(model_name),
+    )
+
+    orchestrator.initialize_retrieval_runtime()
+
+    assert loaded_models == ["BAAI/bge-reranker-base"]
 
 
 def test_built_graph_routes_to_code_reviewer_node(monkeypatch: pytest.MonkeyPatch) -> None:

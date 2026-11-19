@@ -194,6 +194,25 @@ def test_retrieve_context_stops_when_no_chunk_is_found() -> None:
     assert "retrieved context" in result["message"]
 
 
+def test_hybrid_retrieval_runs_without_a_reranker() -> None:
+	document = make_document("Mean is the average.", index=8)
+	collection = FakeCollection([document])
+
+	result = retriever.retrieve_context(
+		"mean",
+		FakeCollection([]),
+		FakeCollection([]),
+		collection,
+		reranker=None,
+		chat_llm=UnusedLlm(),
+		top_k_final=1,
+		retrieval_method="hybrid",
+	)
+
+	assert result["status"] == "ok"
+	assert result["ranked_docs"] == [document]
+
+
 def test_retrieval_tool_binds_dependencies_and_returns_context() -> None:
     document = make_document("The mean is the average.", index=7)
     collection = FakeCollection([document])
